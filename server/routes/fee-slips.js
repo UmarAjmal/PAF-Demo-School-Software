@@ -565,6 +565,21 @@ router.post('/generate', async (req, res) => {
             console.error("Initial fee reminder trigger error:", schedErr.message);
         }
 
+        if (generatedCount > 0) {
+            try {
+                const { notifyPermission } = require('../utils/notify');
+                await notifyPermission('fees.generate', {
+                    type: 'fee_generation',
+                    title: `Monthly Fee Slips Generated 🧾`,
+                    message: `${generatedCount} fee slips generated for Year ${actualYear} (Months: ${monthsArray.join(', ')}). Total students covered: ${coveredByFamilySlips + coveredByIndividual}.`,
+                    link: '/fees/generate',
+                    clientOrPool: pool
+                });
+            } catch (notifErr) {
+                console.error("Fee generation notification error:", notifErr.message);
+            }
+        }
+
         res.status(201).json({
             message: 'Fee slips generated',
             generated: generatedCount,

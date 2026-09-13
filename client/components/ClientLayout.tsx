@@ -6,8 +6,64 @@ import { usePathname, useRouter } from 'next/navigation';
 import { ToastContainer, toast } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 import { useAuth } from '@/contexts/AuthContext';
+import { requestMobileNotificationPermissions, triggerNativeDeviceNotification, setupNativeNotificationActionListener } from '@/utils/nativeNotifications';
+import { NotificationBell } from '@/components/notifications/NotificationBell';
 
 const API = process.env.NEXT_PUBLIC_API_URL || "https://demo-school-soxa.onrender.com";
+
+function GlobalNotificationRunner({ user }: { user: any }) {
+  const router = useRouter();
+  const notifiedIdsRef = useRef<Set<number>>(new Set());
+
+  useEffect(() => {
+    if (!user) return;
+
+    // 1. Request permissions & setup native Android channel
+    requestMobileNotificationPermissions();
+
+    // 2. Attach native action listener to navigate on notification tap
+    setupNativeNotificationActionListener((url) => {
+      if (url) {
+        const isStudent = (user?.role_name || '').toLowerCase().includes('student') || user?.dashboard_access === 'student';
+        if (isStudent && (url.startsWith('/fees/collect') || url.startsWith('/students/profile'))) {
+          router.push('/');
+        } else {
+          router.push(url);
+        }
+      }
+    });
+
+    // 3. Polling runner for real-time background notifications across all pages
+    const pollNotifications = async () => {
+      try {
+        const params = new URLSearchParams();
+        if (user.id) params.append('user_id', String(user.id));
+        if (user.role_name) params.append('role', user.role_name);
+        if (user.family_id) params.append('family_id', String(user.family_id));
+        if (user.student_id) params.append('student_id', String(user.student_id));
+
+        const res = await fetch(`${API}/notifications?${params.toString()}&limit=20`);
+        if (res.ok) {
+          const data = await res.json();
+          const list = data.notifications || [];
+          for (const n of list) {
+            if (!n.is_read && !notifiedIdsRef.current.has(n.id)) {
+              notifiedIdsRef.current.add(n.id);
+              triggerNativeDeviceNotification(n.id, n.title, n.message, n.link);
+            }
+          }
+        }
+      } catch (e) { }
+    };
+
+    pollNotifications();
+    const interval = setInterval(pollNotifications, 12000);
+    return () => clearInterval(interval);
+  }, [user, router]);
+
+  return null;
+}
+
 
 function useAutoBackup(isLoggedIn: boolean) {
   useEffect(() => {

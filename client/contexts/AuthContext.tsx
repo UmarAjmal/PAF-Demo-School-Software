@@ -21,6 +21,8 @@ export interface AuthUser {
     is_active: boolean;
     permissions: Permission[];
     employee_id?: number;
+    student_id?: number;
+    family_id?: string;
     incharge_class?: { class_id: number, section_id: number } | null;
     dashboard_access?: string;
     token?: string;

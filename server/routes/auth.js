@@ -66,6 +66,16 @@ router.post('/login', async (req, res) => {
                 safeUser.incharge_class = JSON.parse(safeUser.incharge_class);
             } catch(e) {}
         }
+        
+        if (safeUser.id) {
+            try {
+                const sCheck = await pool.query('SELECT student_id, family_id FROM students WHERE user_id = $1 LIMIT 1', [safeUser.id]);
+                if (sCheck.rows.length > 0) {
+                    safeUser.student_id = sCheck.rows[0].student_id;
+                    safeUser.family_id = sCheck.rows[0].family_id;
+                }
+            } catch (e) {}
+        }
         res.json(safeUser);
 
     } catch (err) {

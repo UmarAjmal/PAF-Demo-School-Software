@@ -248,7 +248,7 @@ async function checkMissedBackupsOnStartup(isEnabled) {
     }
 }
 
-const { createNotification } = require('./utils/notify');
+const { createNotification, getFamilyLeadStudent } = require('./utils/notify');
 
 /**
  * Automated Fee Reminder Notification Scheduler

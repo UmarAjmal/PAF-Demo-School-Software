@@ -21,7 +21,7 @@ export default function AttendanceSettingsHubPage() {
 
             {/* 2 Main Premium Navigation Cards */}
             <div className="row g-4">
-                {/* 1. Staff Attendance Setting Card */}
+                {/* 1. Staff Attendance Setting Card (Disabled/Commented Out)
                 <div className="col-12 col-lg-6">
                     <Link href="/attendance/settings/staff" className="text-decoration-none">
                         <div className="card border-0 shadow-sm rounded-4 h-100 p-4 p-md-5 position-relative overflow-hidden hub-card transition-all"
@@ -98,9 +98,10 @@ export default function AttendanceSettingsHubPage() {
                         </div>
                     </Link>
                 </div>
+                */}
 
                 {/* 2. Student Attendance Setting Card */}
-                <div className="col-12 col-lg-6">
+                <div className="col-12 col-lg-8 col-xl-7">
                     <Link href="/attendance/settings/students" className="text-decoration-none">
                         <div className="card border-0 shadow-sm rounded-4 h-100 p-4 p-md-5 position-relative overflow-hidden hub-card transition-all"
                             style={{
