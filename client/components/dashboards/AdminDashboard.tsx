@@ -15,6 +15,9 @@ type AdminData = {
   stats: {
     total_students: number; total_staff: number; total_classes: number;
     pending_fees: number; this_month_collected: number; today_collected: number;
+    this_month_tuition_billed?: number;
+    this_month_remaining_dues?: number;
+    this_month_expenses?: number;
   };
   today_student_att: { present: number; absent: number; late: number; on_leave: number; total: number };
   today_staff_att: { present: number; absent: number; late: number; total: number };
@@ -98,7 +101,10 @@ export default function AdminDashboard({ userName }: { userName: string }) {
           <StatCard icon="bi-building" label="Classes" value={fmt(s.total_classes)} sub="All sections" accent={C.purple} />
           <StatCard icon="bi-cash-coin" label="Today Collected" value={<MaskedAmount amount={s.today_collected} />} sub="Fee received today" accent={C.green} />
           <StatCard icon="bi-graph-up-arrow" label={MONTHS[new Date().getMonth()] + ' Collected'} value={<MaskedAmount amount={s.this_month_collected} />} sub="This month" accent={C.orange} />
-          <StatCard icon="bi-exclamation-circle-fill" label="Pending Fees" value={<MaskedAmount amount={s.pending_fees} />} sub="Unpaid + partial" accent={C.red} />
+          <StatCard icon="bi-piggy-bank-fill" label={MONTHS[new Date().getMonth()] + ' Billed'} value={<MaskedAmount amount={s.this_month_tuition_billed || 0} />} sub="Tuition fee billed" accent={C.teal} />
+          <StatCard icon="bi-exclamation-octagon-fill" label={MONTHS[new Date().getMonth()] + ' Dues'} value={<MaskedAmount amount={s.this_month_remaining_dues || 0} />} sub="Current month unpaid" accent={C.red} />
+          <StatCard icon="bi-receipt-cutoff" label={MONTHS[new Date().getMonth()] + ' Expenses'} value={<MaskedAmount amount={s.this_month_expenses || 0} />} sub="Current month expenses" accent="#ea580c" />
+          <StatCard icon="bi-exclamation-circle-fill" label="Total Pending" value={<MaskedAmount amount={s.pending_fees} />} sub="All time unpaid" accent={C.red} />
         </div>
       )}
 

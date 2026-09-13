@@ -89,7 +89,7 @@ const NAV_GROUPS: NavGroup[] = [
   { key: 'dashboard', label: 'Dashboard', icon: 'bi-speedometer2', href: '/' },
   {
     key: 'students', label: 'Students', icon: 'bi-people-fill', href: '/students/details', permission: 'students',
-    subs: [{ label: 'New Admission', href: '/students/admission' }, { label: 'Import Students', href: '/students/import' }, { label: 'Students Details', href: '/students/details' }]
+    subs: [{ label: 'New Admission', href: '/students/admission' }, { label: 'Import Students', href: '/students/import' }, { label: 'Students Details', href: '/students/details' }, { label: 'Family Directory', href: '/students/families' }]
   },
   {
     key: 'academic', label: 'Academic', icon: 'bi-mortarboard-fill', href: '/academic/classes', permission: 'academic',
@@ -113,11 +113,17 @@ const NAV_GROUPS: NavGroup[] = [
   },
   {
     key: 'attendance', label: 'Attendance', icon: 'bi-calendar-check-fill', href: '/attendance/students', permission: 'attendance',
-    subs: [{ label: 'Student Attendance', href: '/attendance/students' }, { label: 'Student History', href: '/attendance/students/history' }, { label: 'Staff Attendance', href: '/attendance/staff' }, { label: 'Staff History', href: '/attendance/staff/history' }]
+    subs: [
+      { label: 'Student Attendance', href: '/attendance/students' },
+      { label: 'Student History', href: '/attendance/students/history' },
+      { label: 'Staff Attendance', href: '/attendance/staff' },
+      { label: 'Staff History', href: '/attendance/staff/history' },
+      { label: 'Attendance Settings', href: '/attendance/settings' }
+    ]
   },
   {
-    key: 'reports', label: 'Reports', icon: 'bi-bar-chart-fill', href: '/reports/students', permission: 'reports',
-    subs: [{ label: 'Student Report', href: '/reports/students' }, { label: 'Results Report', href: '/reports/results' }, { label: 'Expense Report', href: '/reports/expenses' }, { label: 'Family Fee Report', href: '/reports/family-fee' }, { label: 'Admission Report', href: '/reports/admission' }]
+    key: 'reports', label: 'Reports', icon: 'bi-bar-chart-fill', href: '/reports/monthly', permission: 'reports',
+    subs: [{ label: 'Monthly Report', href: '/reports/monthly' }, { label: 'Student Report', href: '/reports/students' }, { label: 'Results Report', href: '/reports/results' }, { label: 'Expense Report', href: '/reports/expenses' }, { label: 'Family Fee Report', href: '/reports/family-fee' }, { label: 'Admission Report', href: '/reports/admission' }]
   },
   {
     key: 'settings', label: 'Settings', icon: 'bi-gear-fill', href: '/settings', permission: 'settings',
@@ -129,6 +135,7 @@ const NAV_PERMISSION_MAP: Record<string, string> = {
   '/students/admission': 'students.admission',
   '/students/import': 'students.import',
   '/students/details': 'students.details',
+  '/students/families': 'students.families',
   '/academic/classes': 'academic.classes',
   '/academic/sections': 'academic.sections',
   '/academic/subjects': 'academic.subjects',
@@ -144,8 +151,9 @@ const NAV_PERMISSION_MAP: Record<string, string> = {
   '/expenses/add': 'expenses.add',
   '/expenses/list': 'expenses.list',
   '/expenses/categories': 'expenses.categories',
+  '/expenses/edit': 'expenses.edit',
   '/fees/generate': 'fees.generate',
-  '/fees/print': 'fees.generate',
+  '/fees/print': 'fees.print',
   '/fees/collect': 'fees.collect',
   '/fees/admission': 'fees.admission',
   '/fees/exam-collection': 'fees.exam-collection',
@@ -156,6 +164,10 @@ const NAV_PERMISSION_MAP: Record<string, string> = {
   '/attendance/students/history': 'attendance.students.history',
   '/attendance/staff': 'attendance.staff',
   '/attendance/staff/history': 'attendance.staff.history',
+  '/attendance/settings': 'attendance.settings',
+  '/attendance/settings/staff': 'attendance.settings',
+  '/attendance/settings/students': 'attendance.settings',
+  '/reports/monthly': 'reports.monthly',
   '/reports/students': 'reports.students',
   '/reports/results': 'reports.results',
   '/reports/expenses': 'reports.expenses',
@@ -408,10 +420,12 @@ const SidebarInner = memo(function SidebarInner({ user, isLoggedIn, logout, hasP
         {user && (
           <div className="sl-user">
             <div className="sl-avatar">{getInitials(user.full_name || 'U')}</div>
-            <div className="sl-user-info">
-              <span className="sl-user-name">{user.full_name}</span>
-              <span className="sl-user-role">{user.role_name}</span>
-            </div>
+            {expanded && (
+              <div className="sl-user-info">
+                <span className="sl-user-name text-truncate" title={user.full_name}>{user.full_name}</span>
+                <span className="sl-user-role text-truncate">{user.role_name}</span>
+              </div>
+            )}
             <button onClick={() => logoutRef.current()} className="sl-logout" title="Sign Out">
               <i className="bi bi-box-arrow-right" />
             </button>

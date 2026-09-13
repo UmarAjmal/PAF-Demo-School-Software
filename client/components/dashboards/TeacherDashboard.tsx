@@ -4,7 +4,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import Link from 'next/link';
 import {
   API, fmt, C,
-  StatCard, Panel, DashShell, DashLoading, DashError,
+  StatCard, Panel, DashShell, DashLoading, DashError, AttendanceDetailsModal,
 } from './shared';
 
 type TeacherData = {
@@ -29,6 +29,7 @@ export default function TeacherDashboard({ userId }: { userId: number }) {
   const [data, setData] = useState<TeacherData | null>(null);
   const [loading, setLoad] = useState(true);
   const [err, setErr] = useState('');
+  const [modal, setModal] = useState<{ isOpen: boolean; status: string; classId?: number }>({ isOpen: false, status: '' });
 
   useEffect(() => {
     fetch(API + '/dashboard/teacher?user_id=' + userId)
@@ -125,13 +126,13 @@ export default function TeacherDashboard({ userId }: { userId: number }) {
                       <td style={{ padding: '12px 16px', color: '#475569' }}>{r.section_name || ''}</td>
                       <td style={{ padding: '12px 16px', color: '#475569', fontWeight: 600 }}>{r.total}</td>
                       <td style={{ padding: '12px 16px' }}>
-                        <span style={{ fontWeight: 700, color: '#16a34a', background: '#16a34a1a', padding: '3px 10px', borderRadius: 20, fontSize: 12 }}>{r.present}</span>
+                        <span onClick={() => setModal({ isOpen: true, status: 'Present', classId: r.class_id })} title="Click to view Present list" style={{ cursor: 'pointer', fontWeight: 700, color: '#16a34a', background: '#16a34a1a', padding: '3px 10px', borderRadius: 20, fontSize: 12 }}>{r.present}</span>
                       </td>
                       <td style={{ padding: '12px 16px' }}>
-                        <span style={{ fontWeight: 700, color: '#dc2626', background: '#dc26261a', padding: '3px 10px', borderRadius: 20, fontSize: 12 }}>{r.absent}</span>
+                        <span onClick={() => setModal({ isOpen: true, status: 'Absent', classId: r.class_id })} title="Click to view Absent list" style={{ cursor: 'pointer', fontWeight: 700, color: '#dc2626', background: '#dc26261a', padding: '3px 10px', borderRadius: 20, fontSize: 12 }}>{r.absent}</span>
                       </td>
                       <td style={{ padding: '12px 16px' }}>
-                        <span style={{ fontWeight: 700, color: '#d97706', background: '#d976061a', padding: '3px 10px', borderRadius: 20, fontSize: 12 }}>{r.late}</span>
+                        <span onClick={() => setModal({ isOpen: true, status: 'Late', classId: r.class_id })} title="Click to view Late list" style={{ cursor: 'pointer', fontWeight: 700, color: '#d97706', background: '#d976061a', padding: '3px 10px', borderRadius: 20, fontSize: 12 }}>{r.late}</span>
                       </td>
                       <td style={{ padding: '12px 16px' }}>
                         <span style={{
@@ -146,6 +147,14 @@ export default function TeacherDashboard({ userId }: { userId: number }) {
               </table>
             )}
           </Panel>
+
+          <AttendanceDetailsModal
+            isOpen={modal.isOpen}
+            onClose={() => setModal({ ...modal, isOpen: false })}
+            type="student"
+            status={modal.status}
+            classId={modal.classId}
+          />
         </div>
       )}
 

@@ -1,5 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import Link from 'next/link';
+
+import { NotificationBell } from '../notifications/NotificationBell';
 
 // Quick Actions Dropdown Component
 export function QuickActionsDropdown() {
@@ -30,9 +33,10 @@ export function QuickActionsDropdown() {
   ];
 
   return (
-    <div ref={dropdownRef} style={{ position: 'relative', zIndex: 200 }}>
+    <div ref={dropdownRef} className="quick-actions-dropdown-wrapper" style={{ position: 'relative', zIndex: 200 }}>
       <button
         onClick={() => setOpen(!open)}
+        className="quick-actions-btn"
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -57,7 +61,7 @@ export function QuickActionsDropdown() {
       </button>
 
       {open && (
-        <div style={{
+        <div className="quick-actions-dropdown-panel" style={{
           position: 'absolute',
           top: 'calc(100% + 10px)',
           right: 0,
@@ -189,9 +193,10 @@ export function DashShell({
             </div>
           </div>
 
-          {/* Right Side: Quick Actions Dropdown */}
-          <div className="dash-actions-wrapper" style={{ flexShrink: 0 }}>
+          {/* Right Side: Quick Actions & Notification Bell (Bell Icon Most Right) */}
+          <div className="dash-actions-wrapper" style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10 }}>
             {actions || <QuickActionsDropdown />}
+            <NotificationBell />
           </div>
         </div>
       </div>
@@ -422,6 +427,249 @@ export function Panel({
     </div>
   );
 }
+// Global Mobile-Responsive Attendance Details Popup Modal
+export function AttendanceDetailsModal({
+  isOpen,
+  onClose,
+  type,
+  status,
+  classId,
+  sectionId,
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  type: string;
+  status: string;
+  classId?: number;
+  sectionId?: number;
+}) {
+  const [data, setData] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [search, setSearch] = useState('');
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setLoading(true);
+    setSearch('');
+    let url = `${API}/dashboard/attendance-details?type=${type}&status=${status}`;
+    if (classId) url += `&class_id=${classId}`;
+    if (sectionId) url += `&section_id=${sectionId}`;
+
+    fetch(url)
+      .then(res => res.json())
+      .then(d => { setData(Array.isArray(d) ? d : []); setLoading(false); })
+      .catch(e => { console.error(e); setLoading(false); });
+  }, [isOpen, type, status, classId, sectionId]);
+
+  if (!isOpen || !mounted) return null;
+
+  const filtered = data.filter(item => {
+    if (!search.trim()) return true;
+    const q = search.toLowerCase();
+    const name = (item.name || '').toLowerCase();
+    const guardian = (item.guardian || '').toLowerCase();
+    const cls = (item.class_name || '').toLowerCase();
+    const phone = (item.phone || '').toLowerCase();
+    return name.includes(q) || guardian.includes(q) || cls.includes(q) || phone.includes(q);
+  });
+
+  const getWaLink = (phone: string) => {
+    if (!phone) return '#';
+    const cleaned = phone.replace(/\D/g, '');
+    const finalPhone = cleaned.startsWith('0') ? `92${cleaned.substring(1)}` : cleaned;
+    return `https://wa.me/${finalPhone}`;
+  };
+
+  const statusColor = status.toLowerCase() === 'present' ? '#16a34a' : status.toLowerCase() === 'absent' ? '#dc2626' : '#d97706';
+  const statusBg = status.toLowerCase() === 'present' ? '#dcfce7' : status.toLowerCase() === 'absent' ? '#fee2e2' : '#fef3c7';
+
+  const modalJSX = (
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 99999,
+        background: 'rgba(15, 23, 42, 0.7)',
+        backdropFilter: 'blur(6px)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '12px'
+      }}
+      onClick={onClose}
+    >
+      <div
+        style={{
+          background: '#ffffff',
+          borderRadius: 20,
+          width: '100%',
+          maxWidth: 660,
+          maxHeight: '88vh',
+          display: 'flex',
+          flexDirection: 'column',
+          boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
+          overflow: 'hidden',
+          border: '1px solid #e2e8f0'
+        }}
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div style={{ padding: '16px 20px', borderBottom: '1px solid #e2e8f0', background: '#f8fafc' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div style={{
+                width: 38, height: 38, borderRadius: '50%', background: statusBg, color: statusColor,
+                display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 'bold'
+              }}>
+                <i className={status.toLowerCase() === 'present' ? "bi bi-check-circle-fill" : status.toLowerCase() === 'absent' ? "bi bi-x-circle-fill" : "bi bi-clock-history"} />
+              </div>
+              <div>
+                <h3 style={{ margin: 0, fontSize: 17, color: '#0f172a', fontWeight: 800 }}>
+                  Today's {status} {type === 'staff' ? 'Staff' : 'Students'}
+                </h3>
+                <div style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>
+                  {loading ? 'Fetching records...' : `Total ${filtered.length} of ${data.length} records`}
+                </div>
+              </div>
+            </div>
+            <button
+              onClick={onClose}
+              style={{
+                background: '#e2e8f0', border: 'none', width: 32, height: 32, borderRadius: '50%',
+                cursor: 'pointer', color: '#475569', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontWeight: 'bold', transition: 'all 0.2s'
+              }}
+              title="Close"
+            >
+              <i className="bi bi-x-lg" style={{ fontSize: 14 }} />
+            </button>
+          </div>
+
+          {/* Search bar inside header */}
+          <div style={{ position: 'relative' }}>
+            <i className="bi bi-search" style={{ position: 'absolute', left: 12, top: 10, color: '#94a3b8', fontSize: 13 }} />
+            <input
+              type="text"
+              placeholder="Search name, class, father or phone..."
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              style={{
+                width: '100%', padding: '8px 12px 8px 34px', borderRadius: 10,
+                border: '1px solid #cbd5e1', fontSize: 13, background: '#ffffff', outline: 'none'
+              }}
+            />
+            {search && (
+              <button
+                onClick={() => setSearch('')}
+                style={{ position: 'absolute', right: 10, top: 8, background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8' }}
+              >
+                <i className="bi bi-x-circle-fill" />
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Body */}
+        <div style={{ padding: '16px 20px', overflowY: 'auto', flex: 1, background: '#f8fafc' }}>
+          {loading ? (
+            <div style={{ textAlign: 'center', padding: '40px 20px', color: '#64748b' }}>
+              <div className="spinner-border spinner-border-sm" style={{ width: '2rem', height: '2rem', color: '#0f766e', marginBottom: 12 }} />
+              <div style={{ fontWeight: 600, fontSize: 13 }}>Loading attendance records...</div>
+            </div>
+          ) : filtered.length === 0 ? (
+            <div style={{ textAlign: 'center', color: '#94a3b8', padding: '40px 20px', background: '#fff', borderRadius: 12, border: '1px dashed #cbd5e1' }}>
+              <i className="bi bi-inbox" style={{ fontSize: 36, color: '#cbd5e1', display: 'block', marginBottom: 10 }} />
+              <div style={{ fontWeight: 600 }}>No {status.toLowerCase()} records found.</div>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {filtered.map((item, i) => (
+                <div
+                  key={i}
+                  style={{
+                    background: '#ffffff', padding: '14px 16px', borderRadius: 12, border: '1px solid #e2e8f0',
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10,
+                    boxShadow: '0 1px 3px rgba(0,0,0,0.03)'
+                  }}
+                >
+                  <div style={{ flex: 1, minWidth: 200 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                      <span style={{ fontWeight: 800, color: '#0f172a', fontSize: 15 }}>{item.name}</span>
+                      <span style={{
+                        padding: '2px 8px', borderRadius: 12, fontSize: 10, fontWeight: 800,
+                        background: statusBg, color: statusColor, textTransform: 'uppercase'
+                      }}>
+                        {status}
+                      </span>
+                    </div>
+
+                    <div style={{ fontSize: 12, color: '#64748b', display: 'flex', flexWrap: 'wrap', gap: '4px 14px' }}>
+                      {item.class_name && (
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                          <i className="bi bi-mortarboard-fill" style={{ color: '#0f766e' }} />
+                          <span style={{ fontWeight: 700, color: '#334155' }}>{item.class_name} {item.section_name ? `(${item.section_name})` : ''}</span>
+                        </span>
+                      )}
+
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <i className="bi bi-person-fill" style={{ color: '#64748b' }} />
+                        <span>Guardian: <strong>{item.guardian || '—'}</strong></span>
+                      </span>
+
+                      {item.phone && (
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                          <i className="bi bi-telephone-fill" style={{ color: '#64748b' }} />
+                          <span>{item.phone}</span>
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Actions */}
+                  {item.phone && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <a
+                        href={`tel:${item.phone}`}
+                        style={{
+                          width: 36, height: 36, borderRadius: '50%', background: '#e2e8f0', color: '#1e293b',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center', textDecoration: 'none'
+                        }}
+                        title="Call"
+                      >
+                        <i className="bi bi-telephone-outbound-fill" style={{ fontSize: 14 }} />
+                      </a>
+                      <a
+                        href={getWaLink(item.phone)}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{
+                          width: 36, height: 36, borderRadius: '50%', background: '#25D366', color: '#ffffff',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center', textDecoration: 'none',
+                          boxShadow: '0 2px 8px rgba(37,211,102,0.3)'
+                        }}
+                        title="WhatsApp Message"
+                      >
+                        <i className="bi bi-whatsapp" style={{ fontSize: 18 }} />
+                      </a>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+
+  return createPortal(modalJSX, document.body);
+}
+
 export const ChartCard = Panel;
 
 // Donut Ring
@@ -430,9 +678,7 @@ export function DonutRing({
 }: {
   present: number; absent: number; late: number; total: number; label: string; color: string;
 }) {
-  const [popup, setPopup] = useState<{ isOpen: boolean, type: string, status: string }>({ isOpen: false, type: '', status: '' });
-  const [data, setData] = useState<any[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [modal, setModal] = useState<{ isOpen: boolean; type: string; status: string }>({ isOpen: false, type: '', status: '' });
 
   const pct = total > 0 ? Math.round((present / total) * 100) : 0;
   const r = 44, sw = 9, circ = 2 * Math.PI * r;
@@ -440,20 +686,8 @@ export function DonutRing({
 
   const handleOpen = (status: string) => {
     const type = label.toLowerCase().includes('staff') ? 'staff' : 'student';
-    setPopup({ isOpen: true, type, status });
-    setLoading(true);
-    fetch(`${API}/dashboard/attendance-details?type=${type}&status=${status}`)
-      .then(res => res.json())
-      .then(d => { setData(Array.isArray(d) ? d : []); setLoading(false); })
-      .catch(e => { console.error(e); setLoading(false); });
+    setModal({ isOpen: true, type, status });
   };
-
-  const getWaLink = (phone: string) => {
-    if (!phone) return '#';
-    const cleaned = phone.replace(/\D/g, '');
-    const finalPhone = cleaned.startsWith('0') ? `92${cleaned.substring(1)}` : cleaned;
-    return `https://wa.me/${finalPhone}`;
-  }
 
   return (
     <>
@@ -483,101 +717,12 @@ export function DonutRing({
         </div>
       </div>
 
-      {popup.isOpen && (
-        <div style={{
-          position: 'fixed', inset: 0, zIndex: 9999,
-          background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(3px)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20
-        }}>
-          <div style={{
-            background: '#ffffff', borderRadius: 16, width: '100%', maxWidth: 650,
-            maxHeight: '85vh', display: 'flex', flexDirection: 'column',
-            boxShadow: '0 20px 40px rgba(0,0,0,0.2)', overflow: 'hidden'
-          }}>
-            <div style={{ padding: '20px 24px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#f8fafc' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <div style={{ width: 40, height: 40, borderRadius: '50%', background: popup.status === 'Present' ? '#16a34a1a' : popup.status === 'Absent' ? '#dc26261a' : '#d976061a', color: popup.status === 'Present' ? '#16a34a' : popup.status === 'Absent' ? '#dc2626' : '#d97706', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20 }}>
-                  <i className={popup.status === 'Present' ? "bi bi-check2-circle" : popup.status === 'Absent' ? "bi bi-x-circle" : "bi bi-clock-history"} />
-                </div>
-                <div>
-                  <h2 style={{ margin: 0, fontSize: 18, color: '#0f172a', fontWeight: 800 }}>
-                    {popup.status} {label}
-                  </h2>
-                  <div style={{ fontSize: 12, color: '#64748b', fontWeight: 600, marginTop: 2 }}>
-                    {loading ? 'Fetching records...' : `Total: ${data.length} records found`}
-                  </div>
-                </div>
-              </div>
-              <button onClick={() => setPopup({ ...popup, isOpen: false })} style={{ background: '#f1f5f9', border: 'none', width: 36, height: 36, borderRadius: '50%', cursor: 'pointer', color: '#64748b', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 0.2s' }}>
-                <i className="bi bi-x-lg" style={{ fontSize: 16, fontWeight: 800 }} />
-              </button>
-            </div>
-
-            <div style={{ padding: 24, overflowY: 'auto', flex: 1, background: '#f8fafc' }}>
-              {loading ? (
-                <div style={{ textAlign: 'center', padding: 50, color: '#64748b' }}>
-                  <div className="spinner-border spinner-border-sm" style={{ width: '2rem', height: '2rem', borderWidth: '0.2em', color: '#2563eb', marginBottom: 16 }} />
-                  <div>Loading records...</div>
-                </div>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                  {data.map((item, i) => (
-                    <div key={i} style={{
-                      background: '#fff', padding: '16px 20px', borderRadius: 12, border: '1px solid #e2e8f0',
-                      display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                      boxShadow: '0 2px 4px rgba(0,0,0,0.02)'
-                    }}>
-                      <div>
-                        <div style={{ fontWeight: 800, color: '#0f172a', fontSize: 15, marginBottom: 6 }}>{item.name}</div>
-
-                        <div style={{ fontSize: 13, color: '#475569', display: 'flex', flexWrap: 'wrap', gap: '4px 16px' }}>
-
-                          {item.class_name && (
-                            <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                              <i className="bi bi-mortarboard" style={{ color: '#94a3b8' }} />
-                              <span style={{ fontWeight: 600 }}>{item.class_name} {item.section_name ? `(${item.section_name})` : ''}</span>
-                            </span>
-                          )}
-
-                          <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                            <i className="bi bi-person-heart" style={{ color: '#94a3b8' }} />
-                            <span style={{ fontWeight: 600 }}>{item.guardian || (popup.type === 'staff' ? 'Staff' : 'N/A')}</span>
-                          </span>
-
-                          <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                            <i className="bi bi-telephone-fill" style={{ color: '#94a3b8' }} />
-                            <span style={{ fontWeight: 600, color: '#334155' }}>{item.phone || 'No phone'}</span>
-                          </span>
-
-                        </div>
-                      </div>
-
-                      {item.phone && (
-                        <a href={getWaLink(item.phone)} target="_blank" rel="noreferrer" style={{
-                          display: 'flex', alignItems: 'center', justifyContent: 'center',
-                          width: 44, height: 44, borderRadius: '50%', background: '#25D366', color: '#fff',
-                          textDecoration: 'none', flexShrink: 0, boxShadow: '0 4px 10px rgba(37,211,102,0.3)',
-                          transform: 'scale(1)', transition: 'all 0.2s', alignSelf: 'flex-start'
-                        }} title="Message on WhatsApp"
-                          onMouseEnter={e => { e.currentTarget.style.transform = 'scale(1.08)'; e.currentTarget.style.boxShadow = '0 6px 14px rgba(37,211,102,0.4)'; }}
-                          onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)'; e.currentTarget.style.boxShadow = '0 4px 10px rgba(37,211,102,0.3)'; }}>
-                          <i className="bi bi-whatsapp" style={{ fontSize: 22 }} />
-                        </a>
-                      )}
-                    </div>
-                  ))}
-                  {data.length === 0 && (
-                    <div style={{ textAlign: 'center', color: '#94a3b8', padding: '40px 20px', background: '#fff', borderRadius: 12, border: '1px dashed #cbd5e1' }}>
-                      <i className="bi bi-inbox" style={{ fontSize: 40, color: '#cbd5e1', display: 'block', marginBottom: 12 }} />
-                      No records found for this status.
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      <AttendanceDetailsModal
+        isOpen={modal.isOpen}
+        onClose={() => setModal({ ...modal, isOpen: false })}
+        type={modal.type}
+        status={modal.status}
+      />
     </>
   );
 }
@@ -863,9 +1008,9 @@ export function DailyFeeReceipts() {
                   <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                     <thead>
                       <tr style={{ background: '#f8fafc' }}>
-                        {['Student', 'Class', 'Month', 'Amount', 'Method', 'Status'].map(h => (
+                        {['Student', 'Class', 'Month', 'Amount', 'Method', 'Status', 'Action'].map(h => (
                           <th key={h} style={{
-                            padding: '9px 14px', textAlign: 'left', fontWeight: 700,
+                            padding: '9px 14px', textAlign: h === 'Action' ? 'center' : 'left', fontWeight: 700,
                             fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em',
                             color: '#64748b', borderBottom: '2px solid #f1f5f9', whiteSpace: 'nowrap',
                           }}>{h}</th>
@@ -916,6 +1061,35 @@ export function DailyFeeReceipts() {
                               <i className={`bi ${p.is_printed ? 'bi-printer-fill' : 'bi-exclamation-circle'} me-1`} />
                               {p.is_printed ? 'Printed' : 'Not Printed'}
                             </span>
+                          </td>
+                          <td style={{ padding: '11px 14px', textAlign: 'center' }}>
+                            <Link
+                              href={`/fees/collect?search=${encodeURIComponent(p.is_family_slip ? (p.family_id || '') : (p.student_name || ''))}`}
+                              title="Go to Fee Collection Page"
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                width: 32,
+                                height: 32,
+                                borderRadius: '50%',
+                                background: 'linear-gradient(135deg, #FE7F2D 0%, #d66418 100%)',
+                                color: '#ffffff',
+                                textDecoration: 'none',
+                                boxShadow: '0 3px 10px rgba(254,127,45,0.4)',
+                                transition: 'all 0.2s ease',
+                              }}
+                              onMouseEnter={e => {
+                                (e.currentTarget as HTMLElement).style.transform = 'scale(1.12)';
+                                (e.currentTarget as HTMLElement).style.boxShadow = '0 5px 15px rgba(254,127,45,0.6)';
+                              }}
+                              onMouseLeave={e => {
+                                (e.currentTarget as HTMLElement).style.transform = 'none';
+                                (e.currentTarget as HTMLElement).style.boxShadow = '0 3px 10px rgba(254,127,45,0.4)';
+                              }}
+                            >
+                              <i className="bi bi-arrow-right-short" style={{ fontSize: 20, fontWeight: 800 }} />
+                            </Link>
                           </td>
                         </tr>
                       ))}

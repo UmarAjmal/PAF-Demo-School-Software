@@ -17,10 +17,22 @@ router.get('/teacher', async (req, res) => {
     if (!user_id) return res.status(400).json({ error: 'user_id required' });
 
     try {
-        // Find employee record linked to this app_user
+        // Find employee record linked to this app_user with multi-level fallback
         const empRes = await pool.query(
             `SELECT e.employee_id, e.first_name, e.last_name, e.designation
-             FROM employees e WHERE e.app_user_id = $1 LIMIT 1`,
+             FROM employees e
+             WHERE e.app_user_id = $1
+                OR (e.email IS NOT NULL AND e.email <> '' AND LOWER(e.email) = (SELECT LOWER(email) FROM app_users WHERE id = $1))
+                OR (e.employee_id = $1)
+                OR (LOWER(TRIM(e.first_name || ' ' || COALESCE(e.last_name, ''))) = (SELECT LOWER(TRIM(full_name)) FROM app_users WHERE id = $1))
+             ORDER BY 
+                CASE 
+                    WHEN e.app_user_id = $1 THEN 1
+                    WHEN e.email IS NOT NULL AND LOWER(e.email) = (SELECT LOWER(email) FROM app_users WHERE id = $1) THEN 2
+                    WHEN e.employee_id = $1 THEN 3
+                    ELSE 4
+                END ASC
+             LIMIT 1`,
             [user_id]
         );
         const employee = empRes.rows[0] || null;
@@ -34,19 +46,23 @@ router.get('/teacher', async (req, res) => {
             recentMarkedRes,
             upcomingExamsRes,
         ] = await Promise.all([
-            // Assigned classes + student counts
+            // Assigned classes + student counts (including coordinator assignments)
             emp_id ? pool.query(`
+                WITH combined_classes AS (
+                    SELECT class_id, section_id, is_class_teacher FROM teacher_class_assignment WHERE employee_id = $1
+                    UNION
+                    SELECT class_id, section_id, false AS is_class_teacher FROM attendance_coordinator_assignments WHERE employee_id = $1
+                )
                 SELECT c.class_id, c.class_name,
                        sec.section_id, sec.section_name,
-                       tca.is_class_teacher,
-                       COUNT(s.student_id) FILTER (WHERE s.status='Active') AS student_count
-                FROM teacher_class_assignment tca
+                       COALESCE(bool_or(tca.is_class_teacher), false) AS is_class_teacher,
+                       COUNT(DISTINCT s.student_id) FILTER (WHERE s.status='Active') AS student_count
+                FROM combined_classes tca
                 JOIN classes c ON tca.class_id = c.class_id
                 LEFT JOIN sections sec ON tca.section_id = sec.section_id
                 LEFT JOIN students s ON s.class_id = c.class_id AND s.section_id = sec.section_id
-                WHERE tca.employee_id = $1
-                GROUP BY c.class_id, c.class_name, sec.section_id, sec.section_name, tca.is_class_teacher
-                ORDER BY c.class_name`, [emp_id])
+                GROUP BY c.class_id, c.class_name, sec.section_id, sec.section_name
+                ORDER BY c.class_name, sec.section_name`, [emp_id])
                 : Promise.resolve({ rows: [] }),
 
             // Assigned subjects
@@ -61,20 +77,24 @@ router.get('/teacher', async (req, res) => {
                 ORDER BY c.class_name, sec.section_name, s.subject_name`, [emp_id])
                 : Promise.resolve({ rows: [] }),
 
-            // Today's attendance summary for teacher's classes
+            // Today's attendance summary for teacher's classes (including coordinator delegations)
             emp_id ? pool.query(`
+                WITH combined_classes AS (
+                    SELECT class_id, section_id FROM teacher_class_assignment WHERE employee_id = $1
+                    UNION
+                    SELECT class_id, section_id FROM attendance_coordinator_assignments WHERE employee_id = $1
+                )
                 SELECT c.class_name, c.class_id, sec.section_name, sec.section_id,
-                       COUNT(s.student_id) FILTER (WHERE s.status='Active') AS total_students,
-                       COUNT(sa.attendance_id) FILTER (WHERE sa.attendance_date = CURRENT_DATE AND sa.status='Present') AS present,
-                       COUNT(sa.attendance_id) FILTER (WHERE sa.attendance_date = CURRENT_DATE AND sa.status='Absent')  AS absent,
-                       COUNT(sa.attendance_id) FILTER (WHERE sa.attendance_date = CURRENT_DATE AND sa.status='Late')    AS late,
-                       COUNT(sa.attendance_id) FILTER (WHERE sa.attendance_date = CURRENT_DATE)                         AS marked
-                FROM teacher_class_assignment tca
+                       COUNT(DISTINCT s.student_id) FILTER (WHERE s.status='Active') AS total_students,
+                       COUNT(DISTINCT sa.attendance_id) FILTER (WHERE sa.attendance_date = CURRENT_DATE AND sa.status='Present') AS present,
+                       COUNT(DISTINCT sa.attendance_id) FILTER (WHERE sa.attendance_date = CURRENT_DATE AND sa.status='Absent')  AS absent,
+                       COUNT(DISTINCT sa.attendance_id) FILTER (WHERE sa.attendance_date = CURRENT_DATE AND sa.status='Late')    AS late,
+                       COUNT(DISTINCT sa.attendance_id) FILTER (WHERE sa.attendance_date = CURRENT_DATE)                         AS marked
+                FROM combined_classes tca
                 JOIN classes c ON tca.class_id = c.class_id
                 JOIN sections sec ON tca.section_id = sec.section_id
                 LEFT JOIN students s ON s.class_id = c.class_id AND s.section_id = sec.section_id
                 LEFT JOIN student_attendance sa ON sa.student_id = s.student_id AND sa.attendance_date = CURRENT_DATE
-                WHERE tca.employee_id = $1
                 GROUP BY c.class_id, c.class_name, sec.section_id, sec.section_name
                 ORDER BY c.class_name, sec.section_name`, [emp_id])
                 : Promise.resolve({ rows: [] }),
@@ -88,16 +108,21 @@ router.get('/teacher', async (req, res) => {
 
             // Last 10 attendance entries made
             emp_id ? pool.query(`
+                WITH combined_classes AS (
+                    SELECT class_id, section_id FROM teacher_class_assignment WHERE employee_id = $1
+                    UNION
+                    SELECT class_id, section_id FROM attendance_coordinator_assignments WHERE employee_id = $1
+                )
                 SELECT sa.attendance_date, c.class_name, sec.section_name,
-                       COUNT(sa.attendance_id) FILTER (WHERE sa.status='Present') AS present,
-                       COUNT(sa.attendance_id) FILTER (WHERE sa.status='Absent')  AS absent,
-                       COUNT(sa.attendance_id)                                     AS total
-                FROM teacher_class_assignment tca
+                       COUNT(DISTINCT sa.attendance_id) FILTER (WHERE sa.status='Present') AS present,
+                       COUNT(DISTINCT sa.attendance_id) FILTER (WHERE sa.status='Absent')  AS absent,
+                       COUNT(DISTINCT sa.attendance_id)                                     AS total
+                FROM combined_classes tca
                 JOIN classes c ON tca.class_id = c.class_id
                 JOIN sections sec ON tca.section_id = sec.section_id
                 JOIN students st ON st.class_id = c.class_id AND st.section_id = sec.section_id
                 JOIN student_attendance sa ON sa.student_id = st.student_id
-                WHERE tca.employee_id = $1
+                WHERE sa.attendance_date IS NOT NULL
                 GROUP BY sa.attendance_date, c.class_name, sec.section_name
                 ORDER BY sa.attendance_date DESC, c.class_name, sec.section_name LIMIT 10`, [emp_id])
                 : Promise.resolve({ rows: [] }),
@@ -218,6 +243,35 @@ router.get('/accountant', async (req, res) => {
                 WHERE payment_date >= CURRENT_DATE - INTERVAL '5 months'
                 GROUP BY DATE_TRUNC('month', payment_date)
                 ORDER BY DATE_TRUNC('month', payment_date) ASC`),
+
+            // Current Month Tuition Billed
+            pool.query(`
+                SELECT COALESCE(SUM(ms.total_amount), 0) AS total
+                FROM monthly_fee_slips ms
+                LEFT JOIN students s ON ms.student_id = s.student_id
+                WHERE ms.month = EXTRACT(MONTH FROM CURRENT_DATE)
+                  AND ms.year = EXTRACT(YEAR FROM CURRENT_DATE)
+                  AND (s.category IS NULL OR LOWER(TRIM(s.category)) != 'trusted')
+            `),
+
+            // Current Month Remaining Dues
+            pool.query(`
+                SELECT COALESCE(SUM(GREATEST(0, ms.total_amount - ms.paid_amount)), 0) AS total
+                FROM monthly_fee_slips ms
+                LEFT JOIN students s ON ms.student_id = s.student_id
+                WHERE ms.month = EXTRACT(MONTH FROM CURRENT_DATE)
+                  AND ms.year = EXTRACT(YEAR FROM CURRENT_DATE)
+                  AND (s.category IS NULL OR LOWER(TRIM(s.category)) != 'trusted')
+            `),
+
+            // Current Month Expenses
+            pool.query(`
+                SELECT COALESCE(SUM(amount), 0) AS total
+                FROM expenses
+                WHERE EXTRACT(MONTH FROM expense_date) = EXTRACT(MONTH FROM CURRENT_DATE)
+                  AND EXTRACT(YEAR FROM expense_date) = EXTRACT(YEAR FROM CURRENT_DATE)
+                  AND (status IS NULL OR LOWER(status) != 'cancelled')
+            `),
         ]);
 
         res.json({
@@ -227,6 +281,9 @@ router.get('/accountant', async (req, res) => {
                 month_collected: parseFloat(monthRes.rows[0]?.collected) || 0,
                 pending_fees: parseFloat(pendingRes.rows[0]?.pending) || 0,
                 total_students: parseInt(totalStudRes.rows[0]?.total) || 0,
+                this_month_tuition_billed: parseFloat(monthlyChartRes.length ? 0 : 0) || parseFloat((await pool.query(`SELECT COALESCE(SUM(ms.total_amount), 0) AS total FROM monthly_fee_slips ms LEFT JOIN students s ON ms.student_id = s.student_id WHERE ms.month = EXTRACT(MONTH FROM CURRENT_DATE) AND ms.year = EXTRACT(YEAR FROM CURRENT_DATE) AND (s.category IS NULL OR LOWER(TRIM(s.category)) != 'trusted')`)).rows[0]?.total || 0),
+                this_month_remaining_dues: parseFloat(pendingRes.rows[0]?.pending) || 0,
+                this_month_expenses: parseFloat((await pool.query(`SELECT COALESCE(SUM(amount), 0) AS total FROM expenses WHERE EXTRACT(MONTH FROM expense_date) = EXTRACT(MONTH FROM CURRENT_DATE) AND EXTRACT(YEAR FROM expense_date) = EXTRACT(YEAR FROM CURRENT_DATE) AND (status IS NULL OR LOWER(status) != 'cancelled')`)).rows[0]?.total || 0),
             },
             fee_chart: feeChartRes.rows.map(r => ({ date: r.date, label: fmt(r.date), amount: parseFloat(r.amount) || 0 })),
             monthly_chart: monthlyChartRes.rows.map(r => ({ label: r.month_label, amount: parseFloat(r.amount) || 0 })),
@@ -375,6 +432,35 @@ router.get('/', async (req, res) => {
                 ORDER BY fp.payment_date DESC, fp.payment_id DESC
                 LIMIT 8
             `),
+
+            // 13. Current month tuition billed
+            pool.query(`
+                SELECT COALESCE(SUM(ms.total_amount), 0) AS total
+                FROM monthly_fee_slips ms
+                LEFT JOIN students s ON ms.student_id = s.student_id
+                WHERE ms.month = EXTRACT(MONTH FROM CURRENT_DATE)
+                  AND ms.year = EXTRACT(YEAR FROM CURRENT_DATE)
+                  AND (s.category IS NULL OR LOWER(TRIM(s.category)) != 'trusted')
+            `),
+
+            // 14. Current month remaining dues
+            pool.query(`
+                SELECT COALESCE(SUM(GREATEST(0, ms.total_amount - ms.paid_amount)), 0) AS total
+                FROM monthly_fee_slips ms
+                LEFT JOIN students s ON ms.student_id = s.student_id
+                WHERE ms.month = EXTRACT(MONTH FROM CURRENT_DATE)
+                  AND ms.year = EXTRACT(YEAR FROM CURRENT_DATE)
+                  AND (s.category IS NULL OR LOWER(TRIM(s.category)) != 'trusted')
+            `),
+
+            // 15. Current month expenses
+            pool.query(`
+                SELECT COALESCE(SUM(amount), 0) AS total
+                FROM expenses
+                WHERE EXTRACT(MONTH FROM expense_date) = EXTRACT(MONTH FROM CURRENT_DATE)
+                  AND EXTRACT(YEAR FROM expense_date) = EXTRACT(YEAR FROM CURRENT_DATE)
+                  AND (status IS NULL OR LOWER(status) != 'cancelled')
+            `),
         ]);
 
         // ── Format chart dates ──────────────────────────────────────────────
@@ -411,6 +497,11 @@ router.get('/', async (req, res) => {
         const todayStudAtt = todayStudentAttRes.rows[0] || {};
         const todayStaffAtt = todayStaffAttRes.rows[0] || {};
 
+        const thisMonthTuitionBilledRes = arguments[0] || {}; // fallback
+        const thisMonthBilledVal = parseFloat(recentPaymentsRes[8]?.rows?.[0]?.total || 0) || parseFloat((await pool.query(`SELECT COALESCE(SUM(ms.total_amount), 0) AS total FROM monthly_fee_slips ms LEFT JOIN students s ON ms.student_id = s.student_id WHERE ms.month = EXTRACT(MONTH FROM CURRENT_DATE) AND ms.year = EXTRACT(YEAR FROM CURRENT_DATE) AND (s.category IS NULL OR LOWER(TRIM(s.category)) != 'trusted')`)).rows[0]?.total || 0);
+        const thisMonthRemainingVal = parseFloat((await pool.query(`SELECT COALESCE(SUM(GREATEST(0, ms.total_amount - ms.paid_amount)), 0) AS total FROM monthly_fee_slips ms LEFT JOIN students s ON ms.student_id = s.student_id WHERE ms.month = EXTRACT(MONTH FROM CURRENT_DATE) AND ms.year = EXTRACT(YEAR FROM CURRENT_DATE) AND (s.category IS NULL OR LOWER(TRIM(s.category)) != 'trusted')`)).rows[0]?.total || 0);
+        const thisMonthExpensesVal = parseFloat((await pool.query(`SELECT COALESCE(SUM(amount), 0) AS total FROM expenses WHERE EXTRACT(MONTH FROM expense_date) = EXTRACT(MONTH FROM CURRENT_DATE) AND EXTRACT(YEAR FROM expense_date) = EXTRACT(YEAR FROM CURRENT_DATE) AND (status IS NULL OR LOWER(status) != 'cancelled')`)).rows[0]?.total || 0);
+
         res.json({
             stats: {
                 total_students: parseInt(studentsRes.rows[0]?.total) || 0,
@@ -419,6 +510,9 @@ router.get('/', async (req, res) => {
                 pending_fees: parseFloat(pendingFeesRes.rows[0]?.pending) || 0,
                 this_month_collected: parseFloat(thisMonthFeeRes.rows[0]?.collected) || 0,
                 today_collected: parseFloat(todayFeeRes.rows[0]?.collected) || 0,
+                this_month_tuition_billed: thisMonthBilledVal,
+                this_month_remaining_dues: thisMonthRemainingVal,
+                this_month_expenses: thisMonthExpensesVal,
             },
             today_student_att: {
                 present: parseInt(todayStudAtt.present) || 0,
@@ -447,13 +541,13 @@ router.get('/', async (req, res) => {
 // GET popup attendance details
 router.get('/attendance-details', async (req, res) => {
     try {
-        const { type, status } = req.query;
+        const { type, status, class_id, section_id } = req.query;
         if (!type || !status) return res.status(400).json({ error: 'Missing type or status' });
 
         const targetDate = new Date().toISOString().split('T')[0];
 
         if (type === 'student') {
-            const { rows } = await pool.query(`
+            let sql = `
                  SELECT s.first_name || ' ' || COALESCE(s.last_name, '') as name,
                         s.father_name as guardian,
                         c.class_name,
@@ -466,9 +560,19 @@ router.get('/attendance-details', async (req, res) => {
                  WHERE sa.attendance_date = $1 
                    AND sa.status ILIKE $2
                    AND s.status = 'Active'
-                 ORDER BY c.class_name, s.first_name`,
-                [targetDate, status]
-            );
+            `;
+            const params = [targetDate, status];
+            if (class_id) {
+                params.push(class_id);
+                sql += ` AND s.class_id = $${params.length}`;
+            }
+            if (section_id) {
+                params.push(section_id);
+                sql += ` AND s.section_id = $${params.length}`;
+            }
+            sql += ` ORDER BY c.class_name, s.first_name`;
+
+            const { rows } = await pool.query(sql, params);
             return res.json(rows);
         } else if (type === 'staff') {
             const { rows } = await pool.query(`
@@ -512,7 +616,7 @@ router.get('/daily-fee-receipts', async (req, res) => {
 
         const listQuery = pool.query(
             `SELECT fp.payment_id, fp.amount_paid, fp.payment_date, fp.payment_method, fp.is_printed,
-                    s.first_name||' '||COALESCE(s.last_name, '') AS student_name,
+                    s.student_id, s.admission_no, s.first_name||' '||COALESCE(s.last_name, '') AS student_name,
                     c.class_name, mfs.month, mfs.year, mfs.is_family_slip, mfs.family_id
              FROM fee_payments fp
              JOIN monthly_fee_slips mfs ON fp.slip_id=mfs.slip_id

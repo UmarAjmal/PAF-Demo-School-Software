@@ -118,7 +118,7 @@ export default function GeneralSettings() {
 
             const data = await res.json();
             if (!res.ok) throw new Error(data.error || 'Upload failed');
-            
+
             const savedLogo = data.logo_url || base64Data;
             setSettings(prev => ({ ...prev, logo_url: savedLogo }));
             setLogoPreview(savedLogo);

@@ -65,11 +65,13 @@ export default function EditStudent({ params }: { params: { id: string } }) {
         monthly_fee: '',
         family_fee: '',
         admission_fee: '',
-        other_charges: ''
+        other_charges: '',
+        opening_balance: ''
     });
 
     // Family info state
     const [familyInfo, setFamilyInfo] = useState<{ family_id: string; family_fee: number; family_size: number } | null>(null);
+    const [opbPaid, setOpbPaid] = useState<number>(0);
 
     const [imageFile, setImageFile] = useState<File | null>(null);
     const [documentFiles, setDocumentFiles] = useState<FileList | null>(null);
@@ -89,6 +91,10 @@ export default function EditStudent({ params }: { params: { id: string } }) {
             if (res.ok) {
                 const data = await res.json();
 
+                const opbVal = data.opening_balance ? parseFloat(data.opening_balance) : 0;
+                const opbPaidVal = data.opening_balance_paid ? parseFloat(data.opening_balance_paid) : 0;
+                setOpbPaid(opbPaidVal);
+
                 // Populate Form
                 setForm({
                     ...data,
@@ -102,6 +108,7 @@ export default function EditStudent({ params }: { params: { id: string } }) {
                     // If class/section IDs are present
                     class_id: data.class_id || '',
                     section_id: data.section_id || '',
+                    opening_balance: opbVal > 0 ? opbVal.toString() : '',
                 });
 
                 if (data.class_id) fetchSections(data.class_id);
@@ -114,13 +121,18 @@ export default function EditStudent({ params }: { params: { id: string } }) {
                         if (fRes.ok) {
                             const fData = await fRes.json();
                             const memberCount = fData.members ? fData.members.length : 1;
-                            if (memberCount > 1) {
+                            const parsedFamFee = parseFloat(fData.family_fee) || 0;
+                            if (memberCount > 1 || parsedFamFee > 0) {
                                 setFamilyInfo({
                                     family_id: data.family_id,
-                                    family_fee: parseFloat(fData.family_fee) || 0,
+                                    family_fee: parsedFamFee,
                                     family_size: memberCount
                                 });
-                                setForm(f => ({ ...f, family_fee: String(parseFloat(fData.family_fee) || 0) }));
+                                setForm(f => ({
+                                    ...f,
+                                    family_fee: String(parsedFamFee),
+                                    monthly_fee: parseFloat(f.monthly_fee) > 0 ? f.monthly_fee : String(parsedFamFee)
+                                }));
                             }
                         }
                     } catch (fe) { console.error('Family info fetch error:', fe); }
@@ -176,13 +188,35 @@ export default function EditStudent({ params }: { params: { id: string } }) {
         setSubmitting(true);
         const toastId = toast.loading("Updating Student...");
 
+        const enteredOpb = parseFloat(form.opening_balance || '0') || 0;
+        if (opbPaid > 0 && enteredOpb < opbPaid) {
+            toast.update(toastId, {
+                render: `Opening Balance cannot be less than already paid amount (Rs. ${opbPaid.toLocaleString()})`,
+                type: "error",
+                isLoading: false,
+                autoClose: 5000
+            });
+            setSubmitting(false);
+            return;
+        }
+
         try {
             const formData = new FormData();
 
-            // Append Text Fields
+            // Append Text Fields - Handle optional fields properly
             Object.keys(form).forEach(key => {
-                const value = (form as any)[key];
-                // Exclude system fields or nulls if needed, but backend update handles it
+                let value = (form as any)[key];
+                
+                // Skip empty date fields (dob, admission_date) if empty string to avoid date syntax errors
+                if ((key === 'dob' || key === 'admission_date') && (!value || String(value).trim() === '')) {
+                    return;
+                }
+
+                // Skip empty integer fields (class_id, section_id) if empty string
+                if ((key === 'class_id' || key === 'section_id') && (!value || String(value).trim() === '')) {
+                    return;
+                }
+
                 if (value !== null && value !== undefined) {
                     formData.append(key, value);
                 }
@@ -278,19 +312,19 @@ export default function EditStudent({ params }: { params: { id: string } }) {
                                             </div>
                                             <div className="col-md-3">
                                                 <label className="form-label fw-bold">Admission Date</label>
-                                                <input type="date" className="form-control" required
+                                                <input type="date" className="form-control"
                                                     value={form.admission_date} onChange={e => setForm({ ...form, admission_date: e.target.value })} />
                                             </div>
                                             <div className="col-md-3">
                                                 <label className="form-label fw-bold">Class</label>
-                                                <select className="form-select" required value={form.class_id} onChange={handleClassChange}>
+                                                <select className="form-select" value={form.class_id} onChange={handleClassChange}>
                                                     <option value="">Select Class</option>
                                                     {classes.map((c: any) => <option key={c.class_id} value={c.class_id}>{c.class_name}</option>)}
                                                 </select>
                                             </div>
                                             <div className="col-md-3">
                                                 <label className="form-label fw-bold">Section</label>
-                                                <select className="form-select" required value={form.section_id} onChange={e => setForm({ ...form, section_id: e.target.value })}>
+                                                <select className="form-select" value={form.section_id} onChange={e => setForm({ ...form, section_id: e.target.value })}>
                                                     <option value="">Select Section</option>
                                                     {sections.map((s: any) => <option key={s.section_id} value={s.section_id}>{s.section_name}</option>)}
                                                 </select>
@@ -434,7 +468,7 @@ export default function EditStudent({ params }: { params: { id: string } }) {
                                     {/* MOTHER */}
                                     <div className="col-md-3">
                                         <label className="form-label fw-bold">Mother Name</label>
-                                        <input type="text" className="form-control" required={!form.is_orphan}
+                                        <input type="text" className="form-control"
                                             value={form.mother_name} onChange={e => setForm({ ...form, mother_name: e.target.value })} />
                                     </div>
                                     <div className="col-md-3">
@@ -485,19 +519,19 @@ export default function EditStudent({ params }: { params: { id: string } }) {
                                     </div>
                                     <div className="col-md-4">
                                         <label className="form-label fw-bold">Guardian Phone</label>
-                                        <input type="text" className="form-control" required
+                                        <input type="text" className="form-control"
                                             readOnly={guardianType !== 'Other'}
                                             value={form.guardian_phone} onChange={e => setForm({ ...form, guardian_phone: e.target.value })} />
                                     </div>
                                     <div className="col-md-4">
                                         <label className="form-label fw-bold">Guardian CNIC</label>
-                                        <input type="text" className="form-control" required
+                                        <input type="text" className="form-control"
                                             readOnly={guardianType !== 'Other'}
                                             value={form.guardian_cnic} onChange={e => setForm({ ...form, guardian_cnic: e.target.value })} />
                                     </div>
                                     <div className="col-md-8">
                                         <label className="form-label fw-bold">Guardian Address</label>
-                                        <input type="text" className="form-control" required
+                                        <input type="text" className="form-control"
                                             readOnly={guardianType !== 'Other'}
                                             value={form.guardian_address} onChange={e => setForm({ ...form, guardian_address: e.target.value })} />
                                     </div>
@@ -575,9 +609,10 @@ export default function EditStudent({ params }: { params: { id: string } }) {
                                                 </div>
                                                 <div className="input-group">
                                                     <span className="input-group-text">Rs.</span>
-                                                    <input type="text" inputMode="decimal" className="form-control form-control-lg" placeholder="0.00" required
+                                                    <input type="number" className="form-control form-control-lg" placeholder="0.00"
+                                                        onKeyDown={e => ['e', 'E', '+', '-'].includes(e.key) && e.preventDefault()}
                                                         value={form.family_fee}
-                                                        onChange={e => setForm({ ...form, family_fee: e.target.value.replace(/[^0-9.]/g, '') })} />
+                                                        onChange={e => setForm({ ...form, family_fee: e.target.value })} />
                                                 </div>
                                                 <small className="text-muted">
                                                     <i className="bi bi-info-circle me-1"></i>
@@ -588,16 +623,18 @@ export default function EditStudent({ params }: { params: { id: string } }) {
                                                 <label className="form-label fw-bold">Admission Fee (Paid)</label>
                                                 <div className="input-group">
                                                     <span className="input-group-text">Rs.</span>
-                                                    <input type="text" inputMode="decimal" className="form-control" placeholder="0.00"
-                                                        value={form.admission_fee} onChange={e => setForm({ ...form, admission_fee: e.target.value.replace(/[^0-9.]/g, '') })} />
+                                                    <input type="number" className="form-control" placeholder="0.00"
+                                                        onKeyDown={e => ['e', 'E', '+', '-'].includes(e.key) && e.preventDefault()}
+                                                        value={form.admission_fee} onChange={e => setForm({ ...form, admission_fee: e.target.value })} />
                                                 </div>
                                             </div>
                                             <div className="col-md-6">
                                                 <label className="form-label fw-bold">Other Charges</label>
                                                 <div className="input-group">
                                                     <span className="input-group-text">Rs.</span>
-                                                    <input type="text" inputMode="decimal" className="form-control" placeholder="0.00"
-                                                        value={form.other_charges} onChange={e => setForm({ ...form, other_charges: e.target.value.replace(/[^0-9.]/g, '') })} />
+                                                    <input type="number" className="form-control" placeholder="0.00"
+                                                        onKeyDown={e => ['e', 'E', '+', '-'].includes(e.key) && e.preventDefault()}
+                                                        value={form.other_charges} onChange={e => setForm({ ...form, other_charges: e.target.value })} />
                                                 </div>
                                             </div>
                                         </div>
@@ -609,28 +646,90 @@ export default function EditStudent({ params }: { params: { id: string } }) {
                                             <label className="form-label fw-bold display-6 fs-5">Monthly Tuition Fee</label>
                                             <div className="input-group">
                                                 <span className="input-group-text">Rs.</span>
-                                                <input type="text" inputMode="decimal" className="form-control form-control-lg" placeholder="0.00" required
-                                                    value={form.monthly_fee} onChange={e => setForm({ ...form, monthly_fee: e.target.value.replace(/[^0-9.]/g, '') })} />
+                                                <input type="number" className="form-control form-control-lg" placeholder="0.00"
+                                                    onKeyDown={e => ['e', 'E', '+', '-'].includes(e.key) && e.preventDefault()}
+                                                    value={form.monthly_fee} onChange={e => setForm({ ...form, monthly_fee: e.target.value })} />
                                             </div>
                                         </div>
                                         <div className="col-md-6">
                                             <label className="form-label fw-bold">Admission Fee (Paid)</label>
                                             <div className="input-group">
                                                 <span className="input-group-text">Rs.</span>
-                                                <input type="text" inputMode="decimal" className="form-control" placeholder="0.00"
-                                                    value={form.admission_fee} onChange={e => setForm({ ...form, admission_fee: e.target.value.replace(/[^0-9.]/g, '') })} />
+                                                <input type="number" className="form-control" placeholder="0.00"
+                                                    onKeyDown={e => ['e', 'E', '+', '-'].includes(e.key) && e.preventDefault()}
+                                                    value={form.admission_fee} onChange={e => setForm({ ...form, admission_fee: e.target.value })} />
                                             </div>
                                         </div>
                                         <div className="col-md-6">
                                             <label className="form-label fw-bold">Other Charges</label>
                                             <div className="input-group">
                                                 <span className="input-group-text">Rs.</span>
-                                                <input type="text" inputMode="decimal" className="form-control" placeholder="0.00"
-                                                    value={form.other_charges} onChange={e => setForm({ ...form, other_charges: e.target.value.replace(/[^0-9.]/g, '') })} />
+                                                <input type="number" className="form-control" placeholder="0.00"
+                                                    onKeyDown={e => ['e', 'E', '+', '-'].includes(e.key) && e.preventDefault()}
+                                                    value={form.other_charges} onChange={e => setForm({ ...form, other_charges: e.target.value })} />
                                             </div>
                                         </div>
                                     </div>
                                 )}
+
+                                {/* ── OPENING BALANCE (Purana Baqi) ── */}
+                                {(() => {
+                                    const totalOpb = parseFloat(form.opening_balance || '0') || 0;
+                                    const paidOpb = opbPaid || 0;
+                                    const isFullyPaid = paidOpb > 0 && totalOpb > 0 && paidOpb >= totalOpb;
+                                    const isPartiallyPaid = paidOpb > 0 && paidOpb < totalOpb;
+
+                                    return (
+                                        <div className="mt-3 p-3 rounded-3" style={{ background: 'rgba(254,127,45,0.07)', border: '1.5px solid rgba(254,127,45,0.25)' }}>
+                                            <div className="d-flex align-items-center justify-content-between mb-2 flex-wrap gap-1">
+                                                <div className="d-flex align-items-center gap-2">
+                                                    <i className="bi bi-clock-history" style={{ color: 'var(--accent-orange)', fontSize: '1.1rem' }} />
+                                                    <strong style={{ color: 'var(--primary-dark)', fontSize: '0.95rem' }}>Opening Balance (Purana Baqi)</strong>
+                                                    <span className="badge rounded-pill ms-1" style={{ background: 'rgba(254,127,45,0.15)', color: 'var(--accent-orange)', fontSize: '0.72rem' }}>Optional</span>
+                                                </div>
+                                                {isFullyPaid && (
+                                                    <span className="badge bg-success text-white px-2.5 py-1 rounded-pill" style={{ fontSize: '0.75rem', fontWeight: 600 }}>
+                                                        <i className="bi bi-check-circle-fill me-1"></i>Fully Paid (Rs. {paidOpb.toLocaleString()})
+                                                    </span>
+                                                )}
+                                                {isPartiallyPaid && (
+                                                    <span className="badge bg-warning text-dark px-2.5 py-1 rounded-pill" style={{ fontSize: '0.75rem', fontWeight: 600 }}>
+                                                        <i className="bi bi-pie-chart-fill me-1"></i>Partially Paid: Rs. {paidOpb.toLocaleString()}
+                                                    </span>
+                                                )}
+                                            </div>
+
+                                            <small className="text-muted d-block mb-2">
+                                                Agar is family ka koi purana baqi ho (software install se pehle ka) tou yahan enter karo. Yeh family account mein track hoga aur gradually collect kiya jay ga.
+                                            </small>
+
+                                            <div className="input-group">
+                                                <span className="input-group-text bg-white"><i className="bi bi-wallet2" style={{ color: 'var(--accent-orange)' }} /></span>
+                                                <span className="input-group-text bg-white fw-semibold">Rs.</span>
+                                                <input
+                                                    type="number"
+                                                    step="0.01"
+                                                    className="form-control"
+                                                    placeholder="0.00 (agar koi purana baqi ho)"
+                                                    disabled={isFullyPaid}
+                                                    value={form.opening_balance}
+                                                    onChange={e => setForm({ ...form, opening_balance: e.target.value })}
+                                                />
+                                            </div>
+
+                                            {isFullyPaid && (
+                                                <small className="text-success d-block mt-1.5 fw-semibold" style={{ fontSize: '0.78rem' }}>
+                                                    <i className="bi bi-lock-fill me-1"></i>Yeh Opening Balance mukammal pay ho chuka hai (Paid: Rs. {paidOpb.toLocaleString()}), is wajah se yeh edit nahi ho sakta.
+                                                </small>
+                                            )}
+                                            {isPartiallyPaid && (
+                                                <small className="text-warning-emphasis d-block mt-1.5 fw-semibold" style={{ fontSize: '0.78rem' }}>
+                                                    <i className="bi bi-exclamation-triangle-fill me-1"></i>Is Opening Balance se Rs. {paidOpb.toLocaleString()} Already Paid hai. Naya Balance kam se kam Rs. {paidOpb.toLocaleString()} hona chahiye.
+                                                </small>
+                                            )}
+                                        </div>
+                                    );
+                                })()}
                             </div>
                         </div>
                     </div>

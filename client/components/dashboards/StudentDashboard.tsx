@@ -1,9 +1,13 @@
 'use client';
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { notify } from '@/app/utils/notify';
 import { useAuth } from '@/contexts/AuthContext';
 import { API } from './shared';
+import { NotificationBell } from '../notifications/NotificationBell';
+import { OfflineStorage } from '@/utils/offlineStorage';
+import { apiCache } from '@/utils/apiCache';
 
 export default function StudentDashboard({ user }: { user: any }) {
     const [currentId, setCurrentId] = useState<string | null>(null);
@@ -23,11 +27,13 @@ export default function StudentDashboard({ user }: { user: any }) {
     const [showPwd, setShowPwd] = useState(false);
 
     // Attendance states
-    const now = new Date();
-    const [attMonth, setAttMonth] = useState(String(now.getMonth() + 1));
-    const [attYear, setAttYear] = useState(String(now.getFullYear()));
+    const [attAcademicYears, setAttAcademicYears] = useState<any[]>([]);
+    const [attAcademicYearId, setAttAcademicYearId] = useState<string>('');
+    const [attSessionMonths, setAttSessionMonths] = useState<any[]>([]);
+    const [attSelectedMonth, setAttSelectedMonth] = useState<string>('all'); // 'all' or 'YYYY-MM'
     const [attRecords, setAttRecords] = useState<any[]>([]);
-    const [attStats, setAttStats] = useState<any>({ present: 0, absent: 0, late: 0, leave: 0, total: 0 });
+    const [attStats, setAttStats] = useState<any>({ present: 0, absent: 0, late: 0, leave: 0, total: 0, percentage: 0 });
+    const [attYearStats, setAttYearStats] = useState<any>({ present: 0, absent: 0, late: 0, leave: 0, total: 0, percentage: 0 });
     const [attLoading, setAttLoading] = useState(false);
 
     // Academic performance states
@@ -35,12 +41,38 @@ export default function StudentDashboard({ user }: { user: any }) {
     const [acadLoading, setAcadLoading] = useState(false);
     const [acadTab, setAcadTab] = useState<'terms' | 'tests' | 'prediction'>('terms');
 
-    const fetchAttendance = async (m?: string, y?: string) => {
+    const fetchAttendance = async (yearId?: string, monthFilter?: string) => {
+        if (!currentId) return;
         setAttLoading(true);
         try {
-            const month = m || attMonth; const year = y || attYear;
-            const res = await fetch(`${API}/attendance/students/${currentId}/history?month=${month}&year=${year}`);
-            if (res.ok) { const data = await res.json(); setAttRecords(data.records || []); setAttStats(data.stats || {}); }
+            const yId = yearId !== undefined ? yearId : attAcademicYearId;
+            const mFilter = monthFilter !== undefined ? monthFilter : attSelectedMonth;
+            const queryParams = new URLSearchParams();
+            if (yId) queryParams.append('academic_year_id', yId);
+            if (mFilter && mFilter !== 'all') {
+                const [y, m] = mFilter.split('-');
+                queryParams.append('month', m);
+                queryParams.append('year', y);
+            } else {
+                queryParams.append('month', 'all');
+            }
+
+            const res = await fetch(`${API}/attendance/students/${currentId}/history?${queryParams.toString()}`);
+            if (res.ok) {
+                const data = await res.json();
+                setAttRecords(data.records || []);
+                setAttStats(data.stats || {});
+                setAttYearStats(data.academic_year_stats || {});
+                if (Array.isArray(data.available_years) && data.available_years.length > 0) {
+                    setAttAcademicYears(data.available_years);
+                }
+                if (Array.isArray(data.session_months) && data.session_months.length > 0) {
+                    setAttSessionMonths(data.session_months);
+                }
+                if (data.academic_year?.id && !attAcademicYearId) {
+                    setAttAcademicYearId(String(data.academic_year.id));
+                }
+            }
         } catch { }
         setAttLoading(false);
     };
@@ -77,16 +109,36 @@ export default function StudentDashboard({ user }: { user: any }) {
         if (!user || currentId) return;
         const fetchMe = async () => {
             try {
-                const adm = user.username.replace('STU-', '');
-                const res = await fetch(`${API}/students?keyword=${adm}`);
+                const rawUsername = user.username || '';
+                const adm = rawUsername.replace(/^STU-/i, '').replace(/^FAM-/i, '');
+                
+                const res = await fetch(`${API}/students?keyword=${encodeURIComponent(adm || rawUsername)}`);
                 if (res.ok) {
                     const data = await res.json();
                     const list = data.rows || data;
-                    if (list && list.length > 0) setCurrentId(String(list[0].student_id));
-                    else { setInitError('Profile not found.'); setLoading(false); }
+                    if (list && list.length > 0) {
+                        setCurrentId(String(list[0].student_id));
+                        return;
+                    }
                 }
+
+                if (user.id) {
+                    const resUser = await fetch(`${API}/students?user_id=${user.id}`);
+                    if (resUser.ok) {
+                        const dataUser = await resUser.json();
+                        const listUser = dataUser.rows || dataUser;
+                        if (listUser && listUser.length > 0) {
+                            setCurrentId(String(listUser[0].student_id));
+                            return;
+                        }
+                    }
+                }
+
+                setInitError('Profile not found.');
+                setLoading(false);
             } catch (e) {
-                setInitError('Error finding account'); setLoading(false);
+                setInitError('Error finding account');
+                setLoading(false);
             }
         };
         fetchMe();
@@ -96,30 +148,35 @@ export default function StudentDashboard({ user }: { user: any }) {
         if (!currentId) return;
         const fetchStudent = async () => {
             try {
-                const res = await fetch(`${API}/students/${currentId}`);
-                if (res.ok) {
-                    const data = await res.json();
-                    setStudent(data.rows ? data.rows[0] : (Array.isArray(data) ? data[0] : data));
-                }
+                await apiCache.fetchWithCache(
+                    `${API}/students/${currentId}`,
+                    (data) => {
+                        const s = data.rows ? data.rows[0] : (Array.isArray(data) ? data[0] : data);
+                        setStudent(s);
+                        OfflineStorage.set(`student_${currentId}`, s);
+                        setLoading(false);
+                    }
+                );
             } catch (err) {
-                console.error(err);
-                notify.error("Failed to load profile");
-            } finally {
+                const cached = OfflineStorage.get(`student_${currentId}`);
+                if (cached) setStudent(cached);
                 setLoading(false);
             }
         };
 
         const fetchSiblings = async () => {
-            setLoadingSiblings(true);
             try {
-                const res = await fetch(`${API}/students/${currentId}/siblings`);
-                if (res.ok) {
-                    const data = await res.json();
-                    setSiblings(data);
-                }
+                await apiCache.fetchWithCache(
+                    `${API}/students/${currentId}/siblings`,
+                    (data) => {
+                        setSiblings(data);
+                        OfflineStorage.set(`siblings_${currentId}`, data);
+                        setLoadingSiblings(false);
+                    }
+                );
             } catch (err) {
-                console.error('Error fetching siblings:', err);
-            } finally {
+                const cached = OfflineStorage.get(`siblings_${currentId}`);
+                if (cached) setSiblings(cached);
                 setLoadingSiblings(false);
             }
         };
@@ -130,6 +187,12 @@ export default function StudentDashboard({ user }: { user: any }) {
         fetchFamilySlips();
         fetchAcademics();
     }, [currentId]);
+
+    useEffect(() => {
+        if (currentId) {
+            fetchAttendance(attAcademicYearId, attSelectedMonth);
+        }
+    }, [currentId, attAcademicYearId, attSelectedMonth]);
 
     const fetchFamilySlips = async () => {
         if (!currentId) return;
@@ -322,33 +385,48 @@ export default function StudentDashboard({ user }: { user: any }) {
             )}
 
             {/* HERO SECTION */}
-            <div className="position-relative" style={{ height: '280px', background: 'linear-gradient(135deg, var(--primary-dark) 0%, var(--primary-teal) 100%)' }}>
+            <div className="position-relative profile-hero py-4" style={{ background: 'linear-gradient(135deg, var(--primary-dark) 0%, var(--primary-teal) 100%)', borderRadius: '0 0 24px 24px' }}>
                 <div className="position-absolute top-0 start-0 w-100 h-100 opacity-10"
                     style={{ backgroundImage: 'radial-gradient(#fff 1px, transparent 1px)', backgroundSize: '20px 20px' }}></div>
 
-                <div className="container position-relative h-100">
-                    <button className="btn btn-outline-light position-absolute top-0 start-0 m-4 rounded-circle" onClick={() => router.back()}>
-                        <i className="bi bi-arrow-left"></i>
-                    </button>
+                <div className="container position-relative px-3 px-sm-4">
+                    {/* Top Header Bar */}
+                    <div className="d-flex justify-content-between align-items-center mb-3">
+                        <button className="btn btn-outline-light rounded-circle shadow-sm" onClick={() => router.back()} style={{ width: 42, height: 42 }}>
+                            <i className="bi bi-arrow-left fs-5"></i>
+                        </button>
+                        <div className="d-flex align-items-center gap-2">
+                            <NotificationBell familyId={student?.family_id} studentId={student?.student_id} role="student" />
+                        </div>
+                    </div>
 
-                    <div className="d-flex flex-column justify-content-end h-100 pb-5 ps-4">
-                        <div className="d-flex align-items-end gap-4" style={{ marginBottom: '-60px' }}>
-                            <div className="position-relative">
-                                <img
-                                    src={student.image_url ? `${API}/${student.image_url}` : "https://ui-avatars.com/api/?name=" + (student.first_name || 'Student') + "&background=random&size=150"}
-                                    className="rounded-circle border border-4 border-white shadow-lg bg-white"
-                                    style={{ width: '160px', height: '160px', objectFit: 'cover' }}
-                                />
-                                <span className={`position-absolute bottom-0 end-0 p-3 border border-4 border-white rounded-circle ${student.status === 'Active' ? 'bg-success' : 'bg-secondary'}`}></span>
-                            </div>
-                            <div className="mb-5 text-white animate__animated animate__fadeInUp">
-                                <h1 className="fw-bold mb-1">{student.first_name} {student.last_name}</h1>
-                                <div className="d-flex gap-3 align-items-center opacity-75">
-                                    <span className="badge bg-white bg-opacity-25 border border-white border-opacity-25 backdrop-blur">
-                                        {student.class_name} • {student.section_name}
-                                    </span>
-                                    <span><i className="bi bi-upc-scan me-2"></i>{student.admission_no}</span>
-                                </div>
+                    {/* Student Hero Header Block */}
+                    <div className="d-flex flex-column flex-md-row align-items-center align-items-md-center gap-3 gap-md-4 py-2 text-center text-md-start">
+                        {/* Avatar */}
+                        <div className="position-relative flex-shrink-0">
+                            <img
+                                src={student.image_url ? `${API}/${student.image_url}` : "https://ui-avatars.com/api/?name=" + encodeURIComponent(student.first_name || 'Student') + "&background=195053&color=fff&size=150"}
+                                className="rounded-circle border border-4 border-white shadow-lg bg-white"
+                                style={{ width: '110px', height: '110px', objectFit: 'cover' }}
+                                alt={student.first_name}
+                            />
+                            <span className={`position-absolute bottom-0 end-0 p-2 border border-3 border-white rounded-circle ${student.status === 'Active' ? 'bg-success' : 'bg-secondary'}`} title={student.status || 'Active'}></span>
+                        </div>
+
+                        {/* Title & Info */}
+                        <div className="text-white animate__animated animate__fadeInUp">
+                            <h2 className="fw-bold mb-1 fs-3 fs-md-2 text-white" style={{ textShadow: '0 2px 4px rgba(0,0,0,0.15)' }}>
+                                {student.first_name} {student.last_name}
+                            </h2>
+                            <div className="d-flex flex-wrap justify-content-center justify-content-md-start gap-2 align-items-center mt-2">
+                                <span className="badge px-3 py-1.5 rounded-pill fw-bold text-white shadow-sm" style={{ backgroundColor: 'rgba(0, 0, 0, 0.45)', border: '1px solid rgba(255, 255, 255, 0.4)', fontSize: '0.85rem' }}>
+                                    <i className="bi bi-mortarboard-fill me-1.5 text-warning"></i>
+                                    {student.class_name || 'N/A'}{student.section_name ? ` • ${student.section_name}` : ''}
+                                </span>
+                                <span className="badge bg-white px-3 py-1.5 rounded-pill font-monospace fw-bold shadow-sm" style={{ border: '1px solid rgba(255, 255, 255, 0.8)', fontSize: '0.82rem', color: '#195053' }}>
+                                    <i className="bi bi-upc-scan me-1 text-primary"></i>
+                                    {student.admission_no}
+                                </span>
                             </div>
                         </div>
                     </div>
@@ -356,88 +434,136 @@ export default function StudentDashboard({ user }: { user: any }) {
             </div>
 
             {/* CONTENT SECTION */}
-            <div className="container pt-5 mt-4 pb-5">
+            <div className="container pt-4 mt-1 pb-5 px-3 px-sm-4">
                 <div className="row g-4 profile-side-grid">
                     {/* LEFT SIDEBAR */}
                     <div className="col-lg-3 animate__animated animate__fadeInLeft">
-                        {/* Status Card */}
-                        <div className="card border-0 shadow-sm rounded-4 mb-4 overflow-hidden">
-                            <div className="card-body p-4">
-                                <h6 className="fw-bold text-uppercase text-muted mb-4 small">Quick Info</h6>
-                                <div className="d-flex align-items-center mb-3">
-                                    <div className="me-3 text-secondary" style={{ width: '24px' }}>
-                                        <i className="bi bi-person-badge fs-5"></i>
-                                    </div>
-                                    <div className="flex-grow-1">
-                                        <small className="text-muted d-block text-uppercase" style={{ fontSize: '0.7rem', letterSpacing: '1px' }}>System Username</small>
-                                        <div className="fw-medium text-dark mt-1">
+                        <div className="row g-4">
+                            {/* Status Card */}
+                            <div className="col-12 col-md-6 col-lg-12">
+                                <div className="card border-0 shadow-sm rounded-4 h-100 overflow-hidden">
+                                    <div className="card-body p-3 p-md-4">
+                                        <h6 className="fw-bold text-uppercase text-muted mb-3 small">Quick Info</h6>
+                                        
+                                        {/* Credentials Block */}
+                                        <div className="mb-3">
+                                            <small className="text-muted d-block text-uppercase fw-bold mb-2" style={{ fontSize: '0.68rem', letterSpacing: '0.8px' }}>
+                                                <i className="bi bi-shield-lock me-1"></i>System Credentials
+                                            </small>
                                             {student.username ? (
-                                                <div className="d-flex flex-column gap-2 w-100">
-                                                    <div className="d-flex flex-wrap align-items-center justify-content-between gap-1">
-                                                        <div className="d-flex align-items-center gap-2" style={{ maxWidth: '100%' }}>
-                                                            <span className="font-monospace bg-light border px-2 py-1 rounded small text-primary text-truncate" style={{ display: 'inline-block', maxWidth: 'calc(100% - 30px)' }}>{student.username}</span>
-                                                            <button className="btn btn-sm text-secondary p-0 flex-shrink-0" title="Copy Username" onClick={() => { navigator.clipboard.writeText(student.username); notify.success('Username copied'); }}>
+                                                <div className="bg-light p-3 rounded-3 border">
+                                                    {/* Username Row */}
+                                                    <div className="d-flex align-items-center justify-content-between gap-2 mb-2 pb-2 border-bottom border-secondary border-opacity-10">
+                                                        <div className="min-w-0 flex-grow-1">
+                                                            <small className="text-muted text-uppercase fw-semibold d-block" style={{ fontSize: '0.62rem', letterSpacing: '0.5px' }}>User ID</small>
+                                                            <span className="font-monospace text-primary fw-bold small text-truncate d-block" style={{ fontSize: '0.82rem' }}>
+                                                                {student.username}
+                                                            </span>
+                                                        </div>
+                                                        <div className="d-flex align-items-center gap-1 flex-shrink-0">
+                                                            <button className="btn btn-sm btn-white border shadow-xs text-secondary p-1.5 rounded-2" title="Copy Username" onClick={() => { navigator.clipboard.writeText(student.username); notify.success('Username copied'); }}>
+                                                                <i className="bi bi-copy" style={{ fontSize: '0.85rem' }}></i>
+                                                            </button>
+                                                            <button className="btn btn-sm btn-white border shadow-xs text-primary p-1.5 rounded-2" title="Change Password" onClick={() => setChangePwdModalOpen(true)}>
+                                                                <i className="bi bi-key-fill" style={{ fontSize: '0.85rem' }}></i>
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                    {/* Password Row */}
+                                                    <div className="d-flex align-items-center justify-content-between gap-2">
+                                                        <div className="min-w-0 flex-grow-1">
+                                                            <small className="text-muted text-uppercase fw-semibold d-block" style={{ fontSize: '0.62rem', letterSpacing: '0.5px' }}>Password</small>
+                                                            <span className="font-monospace text-dark fw-bold small text-truncate d-block" style={{ fontSize: '0.8rem' }}>
+                                                                {showPwd ? (student.system_pwd || 'student123') : '••••••••'}
+                                                            </span>
+                                                        </div>
+                                                        <div className="d-flex align-items-center gap-1 flex-shrink-0">
+                                                            <button className="btn btn-sm btn-white border shadow-xs text-secondary p-1.5 rounded-2" title={showPwd ? 'Hide Password' : 'Show Password'} onClick={() => setShowPwd(!showPwd)}>
+                                                                <i className={`bi bi-eye${showPwd ? '-slash' : ''}`} style={{ fontSize: '0.85rem' }}></i>
+                                                            </button>
+                                                            <button className="btn btn-sm btn-white border shadow-xs text-secondary p-1.5 rounded-2" title="Copy Password" onClick={() => { navigator.clipboard.writeText(student.system_pwd || 'student123'); notify.success('Password copied'); }}>
                                                                 <i className="bi bi-copy" style={{ fontSize: '0.85rem' }}></i>
                                                             </button>
                                                         </div>
-                                                        <button className="btn btn-sm text-primary p-0 flex-shrink-0" title="Change Password" onClick={() => setChangePwdModalOpen(true)}>
-                                                            <i className="bi bi-key-fill p-1 fs-6"></i>
-                                                        </button>
                                                     </div>
                                                 </div>
                                             ) : (
-                                                <button className="btn btn-sm btn-outline-primary py-0" style={{ fontSize: '0.75rem' }} onClick={handleGenerateCredentials}>
-                                                    Generate Login
+                                                <button className="btn btn-sm btn-outline-primary w-100 py-2 rounded-3 fw-bold" style={{ fontSize: '0.78rem' }} onClick={handleGenerateCredentials}>
+                                                    <i className="bi bi-key me-1"></i>Generate Login Credentials
                                                 </button>
                                             )}
                                         </div>
-                                    </div>
-                                </div>
-                                <InfoRow icon="bi-person" label="Gender" value={student.gender} />
-                                <InfoRow icon="bi-calendar-event" label="Date of Birth" value={new Date(student.dob).toLocaleDateString()} />
-                                <InfoRow icon="bi-droplet" label="Blood Group" value={student.blood_group} />
-                                <InfoRow icon="bi-telephone" label="Mobile" value={student.student_mobile || student.mobile_no} />
-                                {student.family_id && (
-                                    <div className="d-flex align-items-center mb-3">
-                                        <div className="me-3 text-secondary" style={{ width: '24px' }}>
-                                            <i className="bi bi-people-fill fs-5"></i>
-                                        </div>
-                                        <div>
-                                            <small className="text-muted d-block text-uppercase" style={{ fontSize: '0.7rem', letterSpacing: '1px' }}>Family ID</small>
-                                            <div className="fw-medium text-dark">
-                                                <span className="badge bg-info bg-opacity-10 text-info border border-info">{student.family_id}</span>
+
+                                        <InfoRow icon="bi-person" label="Gender" value={student.gender} />
+                                        <InfoRow icon="bi-calendar-event" label="Date of Birth" value={new Date(student.dob).toLocaleDateString()} />
+                                        <InfoRow icon="bi-droplet" label="Blood Group" value={student.blood_group} />
+                                        <InfoRow icon="bi-telephone" label="Mobile" value={student.student_mobile || student.mobile_no} />
+                                        {student.family_id && (
+                                            <div className="d-flex align-items-center mb-3">
+                                                <div className="me-3 text-secondary" style={{ width: '24px' }}>
+                                                    <i className="bi bi-people-fill fs-5"></i>
+                                                </div>
+                                                <div>
+                                                    <small className="text-muted d-block text-uppercase" style={{ fontSize: '0.7rem', letterSpacing: '1px' }}>Family ID</small>
+                                                    <div className="fw-medium text-dark">
+                                                        <span className="badge bg-info bg-opacity-10 text-info border border-info">{student.family_id}</span>
+                                                    </div>
+                                                </div>
                                             </div>
+                                        )}
+                                        <hr className="text-secondary opacity-25" />
+                                        <div className="text-center text-success fw-bold py-2">
+                                            <i className="bi bi-shield-check me-2"></i>Student Portal Verified
                                         </div>
+
+                                        {student?.student_id && hasPermission('students', 'write') && (
+                                            <div className="mt-3 pt-1">
+                                                <Link
+                                                    href={`/students/edit/${student.student_id}`}
+                                                    className="btn w-100 py-2.5 rounded-3 fw-bold shadow-sm d-flex align-items-center justify-content-center gap-2 text-white transition"
+                                                    style={{
+                                                        background: 'linear-gradient(135deg, var(--primary-teal, #215e61) 0%, var(--primary-dark, #0f1c24) 100%)',
+                                                        border: 'none',
+                                                        fontSize: '0.85rem'
+                                                    }}
+                                                >
+                                                    <i className="bi bi-pencil-square fs-6"></i>
+                                                    <span>Edit Student Profile</span>
+                                                </Link>
+                                            </div>
+                                        )}
                                     </div>
-                                )}
-                                <hr className="text-secondary opacity-25" />
-                                <div className="text-center text-success fw-bold py-2">
-                                    <i className="bi bi-shield-check me-2"></i>Student Portal Verified
                                 </div>
                             </div>
-                        </div>
 
-                        {/* Fees Card */}
-                        <div className="card border-0 shadow-sm rounded-4 mb-4 bg-white">
-                            <div className="card-body p-4 text-center">
-                                <div className="avatar-placeholder bg-success bg-opacity-10 text-success rounded-circle mx-auto mb-3 d-flex align-items-center justify-content-center" style={{ width: '60px', height: '60px' }}>
-                                    <i className={`bi ${(student.family_size || 1) > 1 ? 'bi-people-fill' : 'bi-wallet2'} fs-3`}></i>
-                                </div>
-                                {(student.family_size || 1) > 1 ? (
-                                    <>
-                                        <div className="small text-muted text-uppercase">Family Monthly Fee</div>
-                                        <h3 className="fw-bold text-dark my-1">{fmt(student.family_fee || 0)}</h3>
-                                        <div className="badge bg-warning bg-opacity-10 text-warning mt-2 border border-warning">
-                                            <i className="bi bi-people-fill me-1"></i>{student.family_size} members
+                            {/* Fees Card */}
+                            <div className="col-12 col-md-6 col-lg-12">
+                                <div className="card border-0 shadow-sm rounded-4 bg-white h-100">
+                                    <div className="card-body p-4 text-center d-flex flex-column justify-content-center">
+                                        <div className="avatar-placeholder bg-success bg-opacity-10 text-success rounded-circle mx-auto mb-3 d-flex align-items-center justify-content-center" style={{ width: '56px', height: '56px' }}>
+                                            <i className={`bi ${(student.family_size || 1) > 1 ? 'bi-people-fill' : 'bi-wallet2'} fs-3`}></i>
                                         </div>
-                                    </>
-                                ) : (
-                                    <>
-                                        <div className="small text-muted text-uppercase">Monthly Fee</div>
-                                        <h3 className="fw-bold text-dark my-1">{fmt(student.monthly_fee || 0)}</h3>
-                                        <div className="badge bg-success bg-opacity-10 text-success mt-2">Individual</div>
-                                    </>
-                                )}
+                                        {(student.family_size || 1) > 1 ? (
+                                            <>
+                                                <div className="small text-muted text-uppercase">Family Monthly Fee</div>
+                                                <h3 className="fw-bold text-dark my-1">{fmt(student.family_fee || student.monthly_fee || 0)}</h3>
+                                                <div className="badge bg-warning bg-opacity-10 text-warning mt-2 border border-warning">
+                                                    <i className="bi bi-people-fill me-1"></i>{student.family_size} members
+                                                </div>
+                                            </>
+                                        ) : (
+                                            <>
+                                                <div className="small text-muted text-uppercase">Monthly Fee</div>
+                                                <h3 className="fw-bold text-dark my-1">
+                                                    {fmt(Number(student.monthly_fee || 0) > 0 ? student.monthly_fee : (student.family_fee || 0))}
+                                                </h3>
+                                                <div className="badge bg-success bg-opacity-10 text-success mt-2">
+                                                    {student.family_id && Number(student.family_fee || 0) > 0 ? 'Solo Active Member' : 'Individual'}
+                                                </div>
+                                            </>
+                                        )}
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -445,27 +571,45 @@ export default function StudentDashboard({ user }: { user: any }) {
                     {/* MAIN CONTENT */}
                     <div className="col-lg-9 animate__animated animate__fadeInUp">
                         <div className="card border-0 shadow-sm rounded-4 overflow-hidden" style={{ minHeight: '600px' }}>
-                            <div className="card-header bg-white border-bottom-0 p-0">
-                                <ul className="nav nav-tabs nav-fill" role="tablist">
+                            {/* Sleek Modern Horizontal Scrollable Tab Bar */}
+                            <div className="card-header bg-white border-bottom p-2.5">
+                                <div
+                                    className="d-flex align-items-center gap-2 overflow-x-auto text-nowrap scrollbar-none"
+                                    style={{
+                                        WebkitOverflowScrolling: 'touch',
+                                        scrollbarWidth: 'none',
+                                        msOverflowStyle: 'none'
+                                    }}
+                                >
                                     {[
-                                        hasPermission('dash.student_kpi', 'read') ? 'overview' : null,
-                                        'academic',
-                                        'family',
-                                        hasPermission('dash.student_fees', 'read') ? 'fees' : null,
-                                        hasPermission('dash.student_att', 'read') ? 'attendance' : null,
-                                        'documents'
-                                    ].filter((t): t is string => Boolean(t)).map(tab => (
-                                        <li className="nav-item" key={tab}>
+                                        { id: 'overview', label: 'Overview', icon: 'bi-person-badge-fill', perm: hasPermission('dash.student_kpi', 'read') },
+                                        { id: 'academic', label: 'Academics', icon: 'bi-journal-bookmark-fill', perm: true },
+                                        { id: 'family', label: 'Siblings', icon: 'bi-people-fill', perm: true },
+                                        { id: 'fees', label: 'Fee History', icon: 'bi-receipt-cutoff', perm: hasPermission('dash.student_fees', 'read') },
+                                        { id: 'attendance', label: 'Attendance', icon: 'bi-calendar-check-fill', perm: hasPermission('dash.student_att', 'read') },
+                                        { id: 'documents', label: 'Documents', icon: 'bi-folder2-open', perm: true }
+                                    ].filter(t => t.perm).map(tab => {
+                                        const isActive = activeTab === tab.id;
+                                        return (
                                             <button
-                                                className={`nav-link py-3 fw-bold text-uppercase border-0 rounded-0 ${activeTab === tab ? 'active border-bottom border-primary border-3 text-primary' : 'text-muted'}`}
-                                                onClick={() => setActiveTab(tab)}
-                                                style={{ fontSize: '0.85rem', letterSpacing: '1px' }}
+                                                key={tab.id}
+                                                onClick={() => setActiveTab(tab.id)}
+                                                className="btn btn-sm d-inline-flex align-items-center gap-2 px-3 py-2 rounded-3 fw-bold transition-all border-0"
+                                                style={{
+                                                    fontSize: '0.85rem',
+                                                    letterSpacing: '0.2px',
+                                                    backgroundColor: isActive ? 'var(--primary-teal)' : '#f8fafc',
+                                                    color: isActive ? '#ffffff' : '#64748b',
+                                                    boxShadow: isActive ? '0 4px 12px rgba(25, 80, 83, 0.25)' : 'none',
+                                                    border: isActive ? '1px solid var(--primary-teal)' : '1px solid #e2e8f0',
+                                                }}
                                             >
-                                                {tab}
+                                                <i className={`bi ${tab.icon}`} style={{ fontSize: '0.95rem', color: isActive ? '#ffffff' : '#64748b' }}></i>
+                                                <span>{tab.label}</span>
                                             </button>
-                                        </li>
-                                    ))}
-                                </ul>
+                                        );
+                                    })}
+                                </div>
                             </div>
 
                             <div className="card-body p-4 p-lg-5 bg-light bg-opacity-50">
@@ -1062,27 +1206,33 @@ export default function StudentDashboard({ user }: { user: any }) {
                                         {/* Monthly Fee Card */}
                                         <div className="row g-4 mb-4">
                                             {/* Monthly / Family Fee Card */}
-                                            <div className="col-md-4">
-                                                <div className="card border-0 shadow-sm rounded-4 text-center overflow-hidden">
+                                            <div className="col-xl-4 col-lg-5 col-md-6">
+                                                <div className="card border-0 shadow-sm rounded-4 text-center overflow-hidden h-100">
                                                     <div className="card-header text-white py-3" style={{ background: 'linear-gradient(135deg, var(--primary-dark), var(--primary-teal))' }}>
                                                         <i className={`bi ${(student.family_size || 1) > 1 ? 'bi-people-fill' : 'bi-arrow-repeat'} fs-4 d-block mb-1`}></i>
                                                         <h6 className="mb-0 fw-bold">{(student.family_size || 1) > 1 ? 'Family Monthly Fee' : 'Monthly Fee (Tuition)'}</h6>
                                                     </div>
-                                                    <div className="card-body py-4">
-                                                        <div className="fw-bold" style={{ fontSize: '2rem', color: 'var(--primary-teal)' }}>
-                                                            {(student.family_size || 1) > 1 ? fmt(student.family_fee || 0) : fmt(student?.monthly_fee || 0)}
+                                                    <div className="card-body py-4 px-3 d-flex flex-column justify-content-center align-items-center">
+                                                        <div className="fw-bold text-break" style={{ fontSize: 'calc(1.3rem + 0.6vw)', color: 'var(--primary-teal)', lineHeight: 1.2 }}>
+                                                            {(student.family_size || 1) > 1 
+                                                                ? fmt(student.family_fee || student.monthly_fee || 0) 
+                                                                : fmt(Number(student?.monthly_fee || 0) > 0 ? student.monthly_fee : (student?.family_fee || 0))}
                                                         </div>
                                                         {(student.family_size || 1) > 1 ? (
                                                             <>
                                                                 <div className="text-muted small mt-1">Shared by {student.family_size} family members</div>
-                                                                <div className="badge bg-warning bg-opacity-10 text-warning border border-warning mt-3">
-                                                                    <i className="bi bi-people-fill me-1"></i>Family Slip 1 slip per family
+                                                                <div className="badge bg-warning bg-opacity-10 text-warning border border-warning mt-3 text-wrap px-3 py-2" style={{ maxWidth: '100%', lineHeight: 1.4 }}>
+                                                                    <i className="bi bi-people-fill me-1"></i>Family Slip (1 slip per family)
                                                                 </div>
                                                             </>
                                                         ) : (
                                                             <>
-                                                                <div className="text-muted small mt-1">Billed every month</div>
-                                                                <div className="badge bg-success bg-opacity-10 text-success border border-success mt-3">Auto-applied on slip generation</div>
+                                                                <div className="text-muted small mt-1">
+                                                                    {student.family_id && Number(student.family_fee || 0) > 0 ? 'Solo active member of family' : 'Billed every month'}
+                                                                </div>
+                                                                <div className="badge bg-success bg-opacity-10 text-success border border-success mt-3 text-wrap px-3 py-2" style={{ maxWidth: '100%', lineHeight: 1.4 }}>
+                                                                    Auto-applied on slip generation
+                                                                </div>
                                                             </>
                                                         )}
                                                     </div>
@@ -1219,39 +1369,99 @@ export default function StudentDashboard({ user }: { user: any }) {
                                                                 <th>Students & Applied Heads</th>
                                                                 <th className="text-end">Billed</th>
                                                                 <th className="text-end">Received</th>
+                                                                <th className="text-end">Remaining Balance</th>
+                                                                <th className="text-center">Submission Date</th>
                                                                 <th className="text-center pe-4">Status</th>
                                                             </tr>
                                                         </thead>
                                                         <tbody>
-                                                            {familySlips.map((monthSlip, idx) => (
-                                                                <tr key={idx}>
-                                                                    <td className="ps-4 fw-bold text-dark">
-                                                                        {['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][monthSlip.month - 1]} {monthSlip.year}
-                                                                    </td>
-                                                                    <td>
-                                                                        <div className="d-flex flex-column gap-2 py-2">
-                                                                            {monthSlip.students.map((st: any, i: number) => (
-                                                                                <div key={i} className="d-flex flex-column bg-light p-2 rounded-3 border">
-                                                                                    <div>
-                                                                                        <span className="fw-semibold text-dark mx-1 text-uppercase" style={{ fontSize: '0.8rem' }}>{st.admission_no}</span>
-                                                                                        <span className="fw-bold text-primary" style={{ fontSize: '0.8rem' }}>&bull; {st.name}</span>
-                                                                                    </div>
-                                                                                    <div className="text-muted mt-1" style={{ fontSize: '0.75rem' }}>
-                                                                                        {st.heads?.map((h: any) => `${h.head_name} (${fmt(h.amount)})`).join(' • ') || 'No specific heads'}
-                                                                                    </div>
-                                                                                </div>
-                                                                            ))}
-                                                                        </div>
-                                                                    </td>
-                                                                    <td className="text-end fw-semibold" style={{ color: 'var(--primary-dark)' }}>{fmt(monthSlip.family_total_billed)}</td>
-                                                                    <td className="text-end fw-bold" style={{ color: '#0d9e6e' }}>{fmt(monthSlip.family_total_paid)}</td>
-                                                                    <td className="text-center pe-4">
-                                                                        <span className={`badge px-3 py-2 rounded-pill ${monthSlip.status === 'paid' ? 'bg-success bg-opacity-10 text-success border border-success' : monthSlip.status === 'partial' ? 'bg-warning bg-opacity-10 text-warning border border-warning' : 'bg-danger bg-opacity-10 text-danger border border-danger'}`}>
-                                                                            {monthSlip.status.toUpperCase()}
-                                                                        </span>
-                                                                    </td>
-                                                                </tr>
-                                                            ))}
+                                                            {familySlips.map((monthSlip, idx) => {
+                                                                const isMonthSettled = ['satteled', 'settled'].includes((monthSlip.status || '').toLowerCase());
+                                                                const remainingBalance = isMonthSettled ? 0 : Math.max(0, Number(monthSlip.family_total_billed || 0) - Number(monthSlip.family_total_paid || 0));
+                                                                const subDate = monthSlip.last_submission_date
+                                                                    ? new Date(monthSlip.last_submission_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+                                                                    : '—';
+
+                                                                return (
+                                                                    <tr key={idx}>
+                                                                        <td className="ps-4 fw-bold text-dark">
+                                                                            {['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][monthSlip.month - 1]} {monthSlip.year}
+                                                                        </td>
+                                                                        <td>
+                                                                            <div className="d-flex flex-column gap-2 py-2">
+                                                                                {monthSlip.students.map((st: any, i: number) => {
+                                                                                    const isStTrusted = Boolean(st.is_trusted || (st.category || '').toLowerCase() === 'trusted');
+                                                                                    const stRemaining = Math.max(0, Number(st.billed || 0) - Number(st.paid || 0));
+                                                                                    const stSubDate = st.last_payment_date
+                                                                                        ? new Date(st.last_payment_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+                                                                                        : '';
+                                                                                    return (
+                                                                                        <div key={i} className="d-flex flex-column bg-light p-2 rounded-3 border">
+                                                                                            <div className="d-flex justify-content-between align-items-center flex-wrap gap-1">
+                                                                                                <div className="d-flex align-items-center gap-1">
+                                                                                                    <span className="fw-semibold text-dark mx-1 text-uppercase" style={{ fontSize: '0.8rem' }}>{st.admission_no}</span>
+                                                                                                    <span className="fw-bold text-primary" style={{ fontSize: '0.8rem' }}>&bull; {st.name}</span>
+                                                                                                    {isStTrusted && (
+                                                                                                        <span className="badge rounded-pill px-1.5 py-0.5 ms-1" style={{ backgroundColor: '#e0f2fe', color: '#0284c7', border: '1px solid #bae6fd', fontSize: '0.65rem', fontWeight: 600 }}>
+                                                                                                            <i className="bi bi-shield-check me-1"></i>Trusted
+                                                                                                        </span>
+                                                                                                    )}
+                                                                                                </div>
+                                                                                                <div className="small">
+                                                                                                    <span className="text-muted me-2">Billed: {fmt(st.billed)}</span>
+                                                                                                    <span className="text-success fw-semibold me-2">Paid: {fmt(st.paid)}</span>
+                                                                                                    {isStTrusted && stRemaining === 0 ? (
+                                                                                                        <span className="badge rounded-pill" style={{ backgroundColor: '#e0f2fe', color: '#0369a1', border: '1px solid #bae6fd', fontSize: '0.72rem' }}>Rem: 0 (Free Tuition)</span>
+                                                                                                    ) : stRemaining > 0 ? (
+                                                                                                        <span className="text-danger fw-bold">Rem: {fmt(stRemaining)}</span>
+                                                                                                    ) : (
+                                                                                                        <span className="text-muted">Rem: 0</span>
+                                                                                                    )}
+                                                                                                </div>
+                                                                                            </div>
+                                                                                            <div className="text-muted mt-1 d-flex justify-content-between align-items-center" style={{ fontSize: '0.75rem' }}>
+                                                                                                <span>{st.heads?.map((h: any) => `${h.head_name} (${fmt(h.amount)})`).join(' • ') || 'No specific heads'}</span>
+                                                                                                {stSubDate && <span className="text-dark fw-semibold ms-2"><i className="bi bi-clock me-1 text-primary"></i>Submitted: {stSubDate}</span>}
+                                                                                            </div>
+                                                                                        </div>
+                                                                                    );
+                                                                                })}
+                                                                            </div>
+                                                                        </td>
+                                                                        <td className="text-end fw-semibold" style={{ color: 'var(--primary-dark)' }}>{fmt(monthSlip.family_total_billed)}</td>
+                                                                        <td className="text-end fw-bold" style={{ color: '#0d9e6e' }}>{fmt(monthSlip.family_total_paid)}</td>
+                                                                        <td className="text-end fw-bold" style={{ color: isMonthSettled ? '#0891b2' : remainingBalance > 0 ? '#dc3545' : '#6c757d' }}>
+                                                                            {isMonthSettled ? (
+                                                                                <span className="badge rounded-pill px-2 py-0.5" style={{ backgroundColor: '#e0f2fe', color: '#0369a1', border: '1px solid #bae6fd', fontSize: '0.74rem' }}>
+                                                                                    Settled (PKR 0)
+                                                                                </span>
+                                                                            ) : (
+                                                                                fmt(remainingBalance)
+                                                                            )}
+                                                                        </td>
+                                                                        <td className="text-center small">
+                                                                            {subDate !== '—' ? (
+                                                                                <span className="badge bg-light text-dark border fw-normal px-2 py-1">
+                                                                                    <i className="bi bi-calendar-check me-1 text-success"></i>{subDate}
+                                                                                </span>
+                                                                            ) : (
+                                                                                <span className="text-muted">—</span>
+                                                                            )}
+                                                                        </td>
+                                                                        <td className="text-center pe-4">
+                                                                            {isMonthSettled ? (
+                                                                                <span className="badge px-3 py-2 rounded-pill" style={{ backgroundColor: '#e0f2fe', color: '#0369a1', border: '1px solid #bae6fd', fontWeight: 600 }}>
+                                                                                    <i className="bi bi-shield-check me-1"></i>SETTLED
+                                                                                </span>
+                                                                            ) : (
+                                                                                <span className={`badge px-3 py-2 rounded-pill ${monthSlip.status === 'paid' ? 'bg-success bg-opacity-10 text-success border border-success' : monthSlip.status === 'partial' ? 'bg-warning bg-opacity-10 text-warning border border-warning' : 'bg-danger bg-opacity-10 text-danger border border-danger'}`}>
+                                                                                    {monthSlip.status.toUpperCase()}
+                                                                                </span>
+                                                                            )}
+                                                                        </td>
+                                                                    </tr>
+                                                                );
+                                                            })}
                                                         </tbody>
                                                     </table>
                                                 </div>
@@ -1260,72 +1470,74 @@ export default function StudentDashboard({ user }: { user: any }) {
                                     </div>
                                 )}
 
-                                {/* Opening Balance (OPB) Section */}
-                                {activeTab === 'fees' && parseFloat(student.opening_balance || '0') > 0 && (
-                                    <div className="card border-0 shadow-sm rounded-4 mt-4 overflow-hidden animate__animated animate__fadeInUp">
-                                        <div className="card-header py-3 d-flex justify-content-between align-items-center"
-                                            style={{ borderLeft: parseFloat(student.opb_remaining || '0') > 0 ? '4px solid #e13232' : '4px solid #0d9e6e', backgroundColor: 'white' }}>
-                                            <h6 className="fw-bold mb-0" style={{ color: 'var(--primary-dark)' }}>
-                                                <i className="bi bi-clock-history me-2" style={{ color: 'var(--accent-orange)' }}></i>
-                                                Opening Balance <span className="fw-normal text-muted" style={{ fontSize: '0.8rem' }}>(Family Previous Dues)</span>
-                                            </h6>
-                                            {parseFloat(student.opb_remaining || '0') <= 0 ? (
-                                                <span className="badge rounded-pill bg-success bg-opacity-10 text-success border border-success px-3 py-2">
-                                                    <i className="bi bi-check-circle-fill me-1" />Fully Cleared
-                                                </span>
-                                            ) : (
-                                                <span className="badge rounded-pill px-3 py-2" style={{ background: '#fde8e8', color: '#e13232', border: '1px solid #e1323244', fontWeight: 600 }}>
-                                                    <i className="bi bi-exclamation-circle-fill me-1" />
-                                                    Remaining: {fmt(student.opb_remaining)}
-                                                </span>
-                                            )}
-                                        </div>
-                                        <div className="card-body p-4">
-                                            <div className="row g-3 text-center mb-3">
-                                                {[
-                                                    { label: 'Original OPB', value: fmt(student.opening_balance), color: 'var(--primary-dark)', bg: 'rgba(35,61,77,0.07)' },
-                                                    { label: 'Collected via Slips', value: fmt(student.opening_balance_paid), color: '#0d9e6e', bg: '#e6f9f3' },
-                                                    { label: 'Still Remaining', value: fmt(student.opb_remaining), color: parseFloat(student.opb_remaining || '0') > 0 ? '#e13232' : '#0d9e6e', bg: parseFloat(student.opb_remaining || '0') > 0 ? '#fde8e8' : '#e6f9f3' },
-                                                ].map((s, i) => (
-                                                    <div className="col-4" key={i}>
-                                                        <div className="rounded-3 py-3" style={{ background: s.bg }}>
-                                                            <div className="text-muted small">{s.label}</div>
-                                                            <div className="fw-bold fs-6" style={{ color: s.color }}>{s.value}</div>
-                                                        </div>
-                                                    </div>
-                                                ))}
-                                            </div>
-                                            {parseFloat(student.opening_balance || '0') > 0 && (
-                                                <div className="mb-2">
-                                                    <div className="d-flex justify-content-between small text-muted mb-1">
-                                                        <span>OPB Collection Progress</span>
-                                                        <span>{Math.round((parseFloat(student.opening_balance_paid || '0') / parseFloat(student.opening_balance)) * 100)}%</span>
-                                                    </div>
-                                                    <div className="progress" style={{ height: 10, borderRadius: 10 }}>
-                                                        <div className="progress-bar" role="progressbar"
-                                                            style={{
-                                                                width: `${Math.min(100, Math.round((parseFloat(student.opening_balance_paid || '0') / parseFloat(student.opening_balance)) * 100))}%`,
-                                                                background: parseFloat(student.opb_remaining || '0') <= 0 ? '#0d9e6e' : 'linear-gradient(90deg, var(--primary-teal), #34d399)',
-                                                                borderRadius: 10
-                                                            }}>
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            )}
-                                            {student.opb_notes && (
-                                                <p className="text-muted mb-0 mt-2" style={{ fontSize: '0.82rem' }}>
-                                                    <i className="bi bi-sticky me-1" style={{ color: 'var(--accent-orange)' }} /><em>{student.opb_notes}</em>
-                                                </p>
-                                            )}
-                                            {parseFloat(student.opb_remaining || '0') > 0 && (
-                                                <div className="alert border-0 rounded-3 mt-3 py-2 px-3 mb-0" style={{ background: 'rgba(254,127,45,0.1)', fontSize: '0.82rem' }}>
-                                                    <i className="bi bi-info-circle me-1" style={{ color: 'var(--accent-orange)' }} />
-                                                    OPB is the manually-set prior due. It is collected automatically when fee slips containing the <strong>Previous Balance</strong> head are paid via Collect Fee.
-                                                </div>
-                                            )}
-                                        </div>
-                                    </div>
-                                )}
+                                 {/* Opening Balance (OPB) Section - Hidden on Student Portal as requested */}
+                                 {/* 
+                                 {activeTab === 'fees' && parseFloat(student.opening_balance || '0') > 0 && (
+                                     <div className="card border-0 shadow-sm rounded-4 mt-4 overflow-hidden animate__animated animate__fadeInUp">
+                                         <div className="card-header py-3 d-flex justify-content-between align-items-center"
+                                             style={{ borderLeft: parseFloat(student.opb_remaining || '0') > 0 ? '4px solid #e13232' : '4px solid #0d9e6e', backgroundColor: 'white' }}>
+                                             <h6 className="fw-bold mb-0" style={{ color: 'var(--primary-dark)' }}>
+                                                 <i className="bi bi-clock-history me-2" style={{ color: 'var(--accent-orange)' }}></i>
+                                                 Opening Balance <span className="fw-normal text-muted" style={{ fontSize: '0.8rem' }}>(Family Previous Dues)</span>
+                                             </h6>
+                                             {parseFloat(student.opb_remaining || '0') <= 0 ? (
+                                                 <span className="badge rounded-pill bg-success bg-opacity-10 text-success border border-success px-3 py-2">
+                                                     <i className="bi bi-check-circle-fill me-1" />Fully Cleared
+                                                 </span>
+                                             ) : (
+                                                 <span className="badge rounded-pill px-3 py-2" style={{ background: '#fde8e8', color: '#e13232', border: '1px solid #e1323244', fontWeight: 600 }}>
+                                                     <i className="bi bi-exclamation-circle-fill me-1" />
+                                                     Remaining: {fmt(student.opb_remaining)}
+                                                 </span>
+                                             )}
+                                         </div>
+                                         <div className="card-body p-4">
+                                             <div className="row g-3 text-center mb-3">
+                                                 {[
+                                                     { label: 'Original OPB', value: fmt(student.opening_balance), color: 'var(--primary-dark)', bg: 'rgba(35,61,77,0.07)' },
+                                                     { label: 'Collected via Slips', value: fmt(student.opening_balance_paid), color: '#0d9e6e', bg: '#e6f9f3' },
+                                                     { label: 'Still Remaining', value: fmt(student.opb_remaining), color: parseFloat(student.opb_remaining || '0') > 0 ? '#e13232' : '#0d9e6e', bg: parseFloat(student.opb_remaining || '0') > 0 ? '#fde8e8' : '#e6f9f3' },
+                                                 ].map((s, i) => (
+                                                     <div className="col-4" key={i}>
+                                                         <div className="rounded-3 py-3" style={{ background: s.bg }}>
+                                                             <div className="text-muted small">{s.label}</div>
+                                                             <div className="fw-bold fs-6" style={{ color: s.color }}>{s.value}</div>
+                                                         </div>
+                                                     </div>
+                                                 ))}
+                                             </div>
+                                             {parseFloat(student.opening_balance || '0') > 0 && (
+                                                 <div className="mb-2">
+                                                     <div className="d-flex justify-content-between small text-muted mb-1">
+                                                         <span>OPB Collection Progress</span>
+                                                         <span>{Math.round((parseFloat(student.opening_balance_paid || '0') / parseFloat(student.opening_balance)) * 100)}%</span>
+                                                     </div>
+                                                     <div className="progress" style={{ height: 10, borderRadius: 10 }}>
+                                                         <div className="progress-bar" role="progressbar"
+                                                             style={{
+                                                                 width: `${Math.min(100, Math.round((parseFloat(student.opening_balance_paid || '0') / parseFloat(student.opening_balance)) * 100))}%`,
+                                                                 background: parseFloat(student.opb_remaining || '0') <= 0 ? '#0d9e6e' : 'linear-gradient(90deg, var(--primary-teal), #34d399)',
+                                                                 borderRadius: 10
+                                                             }}>
+                                                         </div>
+                                                     </div>
+                                                 </div>
+                                             )}
+                                             {student.opb_notes && (
+                                                 <p className="text-muted mb-0 mt-2" style={{ fontSize: '0.82rem' }}>
+                                                     <i className="bi bi-sticky me-1" style={{ color: 'var(--accent-orange)' }} /><em>{student.opb_notes}</em>
+                                                 </p>
+                                             )}
+                                             {parseFloat(student.opb_remaining || '0') > 0 && (
+                                                 <div className="alert border-0 rounded-3 mt-3 py-2 px-3 mb-0" style={{ background: 'rgba(254,127,45,0.1)', fontSize: '0.82rem' }}>
+                                                     <i className="bi bi-info-circle me-1" style={{ color: 'var(--accent-orange)' }} />
+                                                     OPB is the manually-set prior due. It is collected automatically when fee slips containing the <strong>Previous Balance</strong> head are paid via Collect Fee.
+                                                 </div>
+                                             )}
+                                         </div>
+                                     </div>
+                                 )}
+                                 */}
 
                                 {/* Admission Fee Payment Modal (in profile) */}
                                 {showPayModal && admissionFee && (
@@ -1351,6 +1563,7 @@ export default function StudentDashboard({ user }: { user: any }) {
                                                             <div className="col-12">
                                                                 <label className="form-label fw-bold small text-muted">Amount Receiving (PKR) <span className="text-danger">*</span></label>
                                                                 <input type="number" className="form-control fw-bold fs-5" required
+                                                                    onKeyDown={e => ['e', 'E', '+', '-'].includes(e.key) && e.preventDefault()}
                                                                     min="1" max={admissionFee.remaining_amount}
                                                                     value={payAmt} onChange={e => setPayAmt(e.target.value)} />
                                                             </div>
@@ -1387,58 +1600,140 @@ export default function StudentDashboard({ user }: { user: any }) {
                                     </>
                                 )}
 
-                                {activeTab === 'attendance' && hasPermission('dash.student_att', 'read') && (
+                                {activeTab === 'attendance' && (
                                     <div className="animate__animated animate__fadeIn">
-                                        {/* Filter row */}
-                                        <div className="d-flex gap-2 mb-4 align-items-end flex-wrap">
-                                            <div>
-                                                <label className="form-label fw-bold small text-muted mb-1">Month</label>
-                                                <select className="form-select form-select-sm" value={attMonth}
-                                                    onChange={e => setAttMonth(e.target.value)}
-                                                    style={{ minWidth: 130 }}>
-                                                    {['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12'].map((m, i) => (
-                                                        <option key={m} value={m}>{['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][i]}</option>
-                                                    ))}
-                                                </select>
+                                        {/* Academic Year Session Banner & Filters */}
+                                        <div className="card border-0 shadow-sm rounded-4 p-3.5 mb-4" style={{ background: 'linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%)', border: '1px solid #e2e8f0' }}>
+                                            <div className="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-3">
+                                                <div>
+                                                    <div className="d-flex align-items-center gap-2 mb-1">
+                                                        <i className="bi bi-mortarboard-fill text-primary fs-5" />
+                                                        <h6 className="fw-bold mb-0 text-dark">Academic Year Session Attendance</h6>
+                                                    </div>
+                                                    <p className="text-muted small mb-0">
+                                                        Tracking session from academic year start to end date
+                                                    </p>
+                                                </div>
+
+                                                <div className="d-flex align-items-center gap-2 flex-wrap">
+                                                    {/* Academic Year Selector */}
+                                                    <div>
+                                                        <select
+                                                            className="form-select form-select-sm rounded-3 fw-semibold shadow-xs"
+                                                            value={attAcademicYearId}
+                                                            onChange={e => {
+                                                                const newId = e.target.value;
+                                                                setAttAcademicYearId(newId);
+                                                                setAttSelectedMonth('all');
+                                                            }}
+                                                            style={{ border: '2px solid rgba(245, 130, 32, 0.4)', minWidth: 160 }}
+                                                        >
+                                                            {attAcademicYears.map(ay => (
+                                                                <option key={ay.id} value={ay.id}>
+                                                                    {ay.year_name} {ay.is_active ? '★ Active' : ''}
+                                                                </option>
+                                                            ))}
+                                                        </select>
+                                                    </div>
+
+                                                    {/* Month Selector */}
+                                                    <div>
+                                                        <select
+                                                            className="form-select form-select-sm rounded-3 fw-semibold shadow-xs"
+                                                            value={attSelectedMonth}
+                                                            onChange={e => setAttSelectedMonth(e.target.value)}
+                                                            style={{ border: '1.5px solid #cbd5e1', minWidth: 180 }}
+                                                        >
+                                                            <option value="all">📅 All Months (Full Session)</option>
+                                                            {attSessionMonths.map(sm => (
+                                                                <option key={`${sm.year}-${sm.month}`} value={`${sm.year}-${sm.month}`}>
+                                                                    {sm.label}
+                                                                </option>
+                                                            ))}
+                                                        </select>
+                                                    </div>
+
+                                                    {attLoading && (
+                                                        <div className="d-flex align-items-center text-teal small ms-2">
+                                                            <span className="spinner-border spinner-border-sm me-1" role="status" />
+                                                            <span>Updating...</span>
+                                                        </div>
+                                                    )}
+                                                </div>
                                             </div>
-                                            <div>
-                                                <label className="form-label fw-bold small text-muted mb-1">Year</label>
-                                                <select className="form-select form-select-sm" value={attYear}
-                                                    onChange={e => setAttYear(e.target.value)}
-                                                    style={{ minWidth: 90 }}>
-                                                    {[String(now.getFullYear() - 1), String(now.getFullYear()), String(now.getFullYear() + 1)].map(y => (
-                                                        <option key={y} value={y}>{y}</option>
-                                                    ))}
-                                                </select>
-                                            </div>
-                                            <button className="btn btn-sm" onClick={() => fetchAttendance()}
-                                                style={{ background: 'var(--primary-teal)', color: '#fff', borderRadius: 6 }}>
-                                                {attLoading ? <span className="spinner-border spinner-border-sm me-1" /> : <i className="bi bi-search me-1" />}
-                                                Load
-                                            </button>
-                                        </div>
-                                        {/* Stats */}
-                                        <div className="row g-2 mb-4">
-                                            {[{ l: 'Present', v: attStats.present, c: '#198754' }, { l: 'Absent', v: attStats.absent, c: '#dc3545' }, { l: 'Late', v: attStats.late, c: '#fd7e14' }, { l: 'Leave', v: attStats.leave, c: '#0d6efd' }, { l: 'Total', v: attStats.total, c: '#6c757d' }].map(s => (
-                                                <div className="col" key={s.l}>
-                                                    <div className="card border-0 shadow-sm text-center py-2" style={{ borderTop: `3px solid ${s.c}` }}>
-                                                        <div style={{ fontSize: '1.5rem', fontWeight: 700, color: s.c }}>{s.v ?? 0}</div>
-                                                        <div style={{ fontSize: '0.75rem', color: '#6c757d' }}>{s.l}</div>
+
+                                            {/* Overall Academic Year Stats Card */}
+                                            <div className="row g-2 align-items-center p-2.5 rounded-3 bg-white border border-light-subtle">
+                                                <div className="col-12 col-md-3 border-end-md">
+                                                    <div className="text-muted small fw-semibold text-uppercase" style={{ fontSize: '0.7rem', letterSpacing: '0.05em' }}>
+                                                        Session Attendance Rate
+                                                    </div>
+                                                    <div className="d-flex align-items-baseline gap-2 mt-0.5">
+                                                        <span className="fs-3 fw-bold" style={{ color: (attYearStats.percentage || 0) >= 75 ? '#198754' : '#dc3545' }}>
+                                                            {attYearStats.percentage ?? 0}%
+                                                        </span>
+                                                        <span className="text-muted small">
+                                                            ({attYearStats.present ?? 0} / {attYearStats.total ?? 0} days)
+                                                        </span>
+                                                    </div>
+                                                    <div className="progress mt-1.5" style={{ height: 6, borderRadius: 10 }}>
+                                                        <div
+                                                            className={`progress-bar ${(attYearStats.percentage || 0) >= 75 ? 'bg-success' : 'bg-danger'}`}
+                                                            style={{ width: `${Math.min(attYearStats.percentage || 0, 100)}%`, borderRadius: 10 }}
+                                                        />
                                                     </div>
                                                 </div>
-                                            ))}
-                                        </div>
-                                        {/* % Badge */}
-                                        {attStats.total > 0 && (
-                                            <div className="mb-3">
-                                                <div className="progress" style={{ height: 10, borderRadius: 10 }}>
-                                                    <div className="progress-bar bg-success" style={{ width: `${Math.round(((attStats.present + attStats.late) / attStats.total) * 100)}%`, borderRadius: 10 }} />
+
+                                                <div className="col-12 col-md-9">
+                                                    <div className="row g-2 text-center">
+                                                        <div className="col-3">
+                                                            <div className="p-1.5 rounded-2" style={{ background: '#e6f9f3' }}>
+                                                                <div className="fw-bold fs-6 text-success">{attYearStats.present ?? 0}</div>
+                                                                <div className="text-muted" style={{ fontSize: '0.7rem' }}>Present</div>
+                                                            </div>
+                                                        </div>
+                                                        <div className="col-3">
+                                                            <div className="p-1.5 rounded-2" style={{ background: '#fde8e8' }}>
+                                                                <div className="fw-bold fs-6 text-danger">{attYearStats.absent ?? 0}</div>
+                                                                <div className="text-muted" style={{ fontSize: '0.7rem' }}>Absent</div>
+                                                            </div>
+                                                        </div>
+                                                        <div className="col-3">
+                                                            <div className="p-1.5 rounded-2" style={{ background: '#fef6e4' }}>
+                                                                <div className="fw-bold fs-6" style={{ color: '#e6860a' }}>{attYearStats.late ?? 0}</div>
+                                                                <div className="text-muted" style={{ fontSize: '0.7rem' }}>Late</div>
+                                                            </div>
+                                                        </div>
+                                                        <div className="col-3">
+                                                            <div className="p-1.5 rounded-2" style={{ background: '#e8f0fd' }}>
+                                                                <div className="fw-bold fs-6 text-primary">{attYearStats.leave ?? 0}</div>
+                                                                <div className="text-muted" style={{ fontSize: '0.7rem' }}>Leave</div>
+                                                            </div>
+                                                        </div>
+                                                    </div>
                                                 </div>
-                                                <div className="small text-muted mt-1 text-end">
-                                                    Attendance: {Math.round(((attStats.present + attStats.late) / attStats.total) * 100)}%
+                                            </div>
+                                        </div>
+
+                                        {/* Filtered View Header / Stats */}
+                                        {attSelectedMonth !== 'all' && (
+                                            <div className="mb-4">
+                                                <h6 className="fw-bold mb-2 small text-muted text-uppercase" style={{ letterSpacing: '0.05em' }}>
+                                                    Monthly Breakdown Stats:
+                                                </h6>
+                                                <div className="row g-2">
+                                                    {[{ l: 'Present', v: attStats.present, c: '#198754' }, { l: 'Absent', v: attStats.absent, c: '#dc3545' }, { l: 'Late', v: attStats.late, c: '#fd7e14' }, { l: 'Leave', v: attStats.leave, c: '#0d6efd' }, { l: 'Total', v: attStats.total, c: '#6c757d' }].map(s => (
+                                                        <div className="col" key={s.l}>
+                                                            <div className="card border-0 shadow-sm text-center py-2" style={{ borderTop: `3px solid ${s.c}` }}>
+                                                                <div style={{ fontSize: '1.4rem', fontWeight: 700, color: s.c }}>{s.v ?? 0}</div>
+                                                                <div style={{ fontSize: '0.75rem', color: '#6c757d' }}>{s.l}</div>
+                                                            </div>
+                                                        </div>
+                                                    ))}
                                                 </div>
                                             </div>
                                         )}
+
                                         {/* Records Table */}
                                         {attRecords.length > 0 ? (
                                             <div className="card border-0 shadow-sm rounded-4">
@@ -1482,7 +1777,7 @@ export default function StudentDashboard({ user }: { user: any }) {
                                             <div className="text-center py-5 text-muted">
                                                 <i className="bi bi-calendar-x fs-1 opacity-50"></i>
                                                 <p className="mt-3 mb-0">No attendance data found</p>
-                                                <small>Select month &amp; year and click Load</small>
+                                                <small>No attendance recorded for the selected session / period</small>
                                             </div>
                                         ) : null}
                                     </div>

@@ -12,7 +12,12 @@ import {
 } from './shared';
 
 type AccountantData = {
-  stats: { today_collected: number; month_collected: number; pending_fees: number; total_students: number };
+  stats: {
+    today_collected: number; month_collected: number; pending_fees: number; total_students: number;
+    this_month_tuition_billed?: number;
+    this_month_remaining_dues?: number;
+    this_month_expenses?: number;
+  };
   fee_chart: { date: string; label: string; amount: number }[];
   monthly_chart: { label: string; amount: number }[];
   recent_payments: any[];
@@ -63,7 +68,10 @@ export default function AccountantDashboard({ userName }: { userName: string }) 
         <div className="dash-stat-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(210px,1fr))', gap: 14, marginBottom: 20 }}>
           <StatCard icon="bi-cash-stack" label="Today Collected" value={<MaskedAmount amount={s.today_collected} />} sub="Received today" accent={C.green} />
           <StatCard icon="bi-graph-up-arrow" label={curMonth + ' Collected'} value={<MaskedAmount amount={s.month_collected} />} sub="This month total" accent={C.teal} />
-          <StatCard icon="bi-exclamation-circle-fill" label="Pending Fees" value={<MaskedAmount amount={s.pending_fees} />} sub="Unpaid + partial" accent={C.red} />
+          <StatCard icon="bi-piggy-bank-fill" label={curMonth + ' Billed'} value={<MaskedAmount amount={s.this_month_tuition_billed || 0} />} sub="Tuition fee billed" accent={C.teal} />
+          <StatCard icon="bi-exclamation-octagon-fill" label={curMonth + ' Dues'} value={<MaskedAmount amount={s.this_month_remaining_dues || 0} />} sub="Current month unpaid" accent={C.red} />
+          <StatCard icon="bi-receipt-cutoff" label={curMonth + ' Expenses'} value={<MaskedAmount amount={s.this_month_expenses || 0} />} sub="Current month expenses" accent="#ea580c" />
+          <StatCard icon="bi-exclamation-circle-fill" label="Total Pending" value={<MaskedAmount amount={s.pending_fees} />} sub="All time unpaid" accent={C.red} />
           <StatCard icon="bi-people-fill" label="Total Students" value={fmt(s.total_students)} sub="Enrolled" accent={C.orange} />
         </div>
       )}

@@ -11,10 +11,8 @@ type SubjectItem = {
     section_name: string;
     class_id: number;
     class_name: string;
-    term_id: number | null;
-    term_name: string;
-    total_marks?: number;
-    passing_marks?: number;
+    total_marks: number;
+    passing_marks: number;
 };
 
 type ClassItem = {
@@ -28,48 +26,33 @@ type SectionItem = {
     class_id: number;
 };
 
-type TermItem = {
-    id: number;
-    term_name: string;
-    academic_year_id?: number;
-    year_name?: string;
-};
-
 export default function SubjectSettings() {
     // Data State
     const [subjects, setSubjects] = useState<SubjectItem[]>([]);
     const [classes, setClasses] = useState<ClassItem[]>([]);
     const [sections, setSections] = useState<SectionItem[]>([]);
-    const [terms, setTerms] = useState<TermItem[]>([]);
 
     // UI State
     const [loading, setLoading] = useState(true);
     const [editMode, setEditMode] = useState(false);
     const [selectedId, setSelectedId] = useState<number | null>(null);
-    const [selectedTermFilter, setSelectedTermFilter] = useState<string>('ALL');
 
     // Form State
     const [form, setForm] = useState({
-        term_id: '',
-        class_id: '',
         subject_name: '',
         subject_code: '',
+        class_id: '',
         section_ids: [] as number[]
     });
 
     const { hasPermission } = useAuth();
-    const API_BASE = process.env.NEXT_PUBLIC_API_URL || "https://demo-school-soxa.onrender.com";
 
     useEffect(() => {
         // Initialize Bootstrap JS for Accordions
-        try {
-            require('bootstrap/dist/js/bootstrap.bundle.min.js');
-        } catch (e) {
-            console.error('Bootstrap JS init error:', e);
-        }
+        require('bootstrap/dist/js/bootstrap.bundle.min.js');
 
         const init = async () => {
-            await Promise.all([fetchClasses(), fetchSections(), fetchSubjects(), fetchTerms()]);
+            await Promise.all([fetchClasses(), fetchSections(), fetchSubjects()]);
             setLoading(false);
         };
         init();
@@ -77,40 +60,23 @@ export default function SubjectSettings() {
 
     const fetchClasses = async () => {
         try {
-            const res = await fetch(`${API_BASE}/academic`);
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "https://demo-school-soxa.onrender.com"}/academic`);
             if (res.ok) setClasses(await res.json());
         } catch (e) { console.error(e); }
     };
 
     const fetchSections = async () => {
         try {
-            const res = await fetch(`${API_BASE}/academic/sections`);
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "https://demo-school-soxa.onrender.com"}/academic/sections`);
             if (res.ok) setSections(await res.json());
         } catch (e) { console.error(e); }
     };
 
     const fetchSubjects = async () => {
         try {
-            const res = await fetch(`${API_BASE}/academic/subjects`);
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "https://demo-school-soxa.onrender.com"}/academic/subjects`);
             if (res.ok) setSubjects(await res.json());
         } catch (e) { console.error(e); }
-    };
-
-    const fetchTerms = async () => {
-        try {
-            let fetchedTerms: TermItem[] = [];
-            let res = await fetch(`${API_BASE}/academic/subjects/terms`);
-            if (!res.ok) res = await fetch(`${API_BASE}/academic/terms/active`);
-            if (!res.ok) res = await fetch(`${API_BASE}/academic/terms-all`);
-
-            if (res.ok) {
-                fetchedTerms = await res.json();
-                setTerms(fetchedTerms);
-                if (fetchedTerms.length > 0) {
-                    setForm(prev => prev.term_id ? prev : { ...prev, term_id: fetchedTerms[0].id.toString() });
-                }
-            }
-        } catch (e) { console.error("Fetch terms error:", e); }
     };
 
     // Derived Data for UI
@@ -122,9 +88,14 @@ export default function SubjectSettings() {
         setForm(prev => {
             const exists = prev.section_ids.includes(secId);
             if (exists) {
+                // Should we allow deselecting in edit mode? Yes.
                 return { ...prev, section_ids: prev.section_ids.filter(id => id !== secId) };
             } else {
+                // In edit mode, if we force single selection, we might clear others.
+                // But for now let's behave as standard multi-select.
+                // Note: The PUT API only takes one section_id.
                 if (editMode) {
+                    // For edit mode, we essentially switch selection
                     return { ...prev, section_ids: [secId] };
                 }
                 return { ...prev, section_ids: [...prev.section_ids, secId] };
@@ -134,10 +105,9 @@ export default function SubjectSettings() {
 
     const resetForm = () => {
         setForm({
-            term_id: '',
-            class_id: '',
             subject_name: '',
             subject_code: '',
+            class_id: '',
             section_ids: []
         });
         setEditMode(false);
@@ -146,10 +116,9 @@ export default function SubjectSettings() {
 
     const handleEdit = (sub: SubjectItem) => {
         setForm({
-            term_id: sub.term_id ? sub.term_id.toString() : '',
-            class_id: sub.class_id.toString(),
             subject_name: sub.subject_name,
             subject_code: sub.subject_code,
+            class_id: sub.class_id.toString(),
             section_ids: [sub.section_id]
         });
         setEditMode(true);
@@ -163,7 +132,7 @@ export default function SubjectSettings() {
 
         const toastId = toast.loading("Deleting...");
         try {
-            const res = await fetch(`${API_BASE}/academic/subjects/${id}`, { method: 'DELETE' });
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "https://demo-school-soxa.onrender.com"}/academic/subjects/${id}`, { method: 'DELETE' });
             if (res.ok) {
                 fetchSubjects();
                 toast.update(toastId, { render: "Subject deleted successfully", type: "success", isLoading: false, autoClose: 3000 });
@@ -184,26 +153,26 @@ export default function SubjectSettings() {
         }
 
         const url = editMode
-            ? `${API_BASE}/academic/subjects/${selectedId}`
-            : `${API_BASE}/academic/subjects`;
+            ? `${process.env.NEXT_PUBLIC_API_URL || "https://demo-school-soxa.onrender.com"}/academic/subjects/${selectedId}`
+            : `${process.env.NEXT_PUBLIC_API_URL || "https://demo-school-soxa.onrender.com"}/academic/subjects`;
 
         const method = editMode ? 'PUT' : 'POST';
         const toastId = toast.loading("Processing...");
 
         let bodyPayload;
         if (editMode) {
+            // Edit Mode: Single Section Update
             bodyPayload = {
                 subject_name: form.subject_name,
                 subject_code: form.subject_code,
-                section_id: form.section_ids[0],
-                term_id: form.term_id || null
+                section_id: form.section_ids[0]
             };
         } else {
+            // Create Mode: Multi Section
             bodyPayload = {
                 subject_name: form.subject_name,
                 subject_code: form.subject_code,
-                section_ids: form.section_ids,
-                term_id: form.term_id || null
+                section_ids: form.section_ids
             };
         }
 
@@ -242,27 +211,17 @@ export default function SubjectSettings() {
         }
     };
 
-    // Filter Subjects by Selected Term
-    const filteredSubjectsList = selectedTermFilter === 'ALL'
-        ? subjects
-        : subjects.filter(sub => (sub.term_name || 'General / All Terms') === selectedTermFilter);
-
-    // Grouping Hierarchy: Term -> Class -> Section -> Subjects
-    const groupedData = filteredSubjectsList.reduce((acc, subject) => {
-        const termName = subject.term_name || 'General / All Terms';
+    // Grouping Logic
+    const groupedData = subjects.reduce((acc, subject) => {
         const className = subject.class_name;
         const sectionName = subject.section_name;
 
-        if (!acc[termName]) acc[termName] = {};
-        if (!acc[termName][className]) acc[termName][className] = {};
-        if (!acc[termName][className][sectionName]) acc[termName][className][sectionName] = [];
+        if (!acc[className]) acc[className] = {};
+        if (!acc[className][sectionName]) acc[className][sectionName] = [];
 
-        acc[termName][className][sectionName].push(subject);
+        acc[className][sectionName].push(subject);
         return acc;
-    }, {} as Record<string, Record<string, Record<string, SubjectItem[]>>>);
-
-    // Get unique list of terms for filter buttons
-    const availableTermNames = Array.from(new Set(subjects.map(s => s.term_name || 'General / All Terms')));
+    }, {} as Record<string, Record<string, SubjectItem[]>>);
 
     if (loading) return (
         <div className="d-flex justify-content-center align-items-center vh-100">
@@ -289,32 +248,9 @@ export default function SubjectSettings() {
                         </div>
                         <div className="card-body p-4">
                             <form onSubmit={handleSubmit}>
-                                {/* Term Selection */}
-                                <div className="mb-3">
-                                    <label className="form-label fw-bold" style={{ color: 'var(--primary-dark)' }}>
-                                        Academic Term <span className="text-danger">*</span>
-                                    </label>
-                                    <select
-                                        className="form-select"
-                                        value={form.term_id}
-                                        onChange={e => setForm({ ...form, term_id: e.target.value })}
-                                        required
-                                    >
-                                        <option value="">-- Choose Term --</option>
-                                        {terms.map(t => (
-                                            <option key={t.id} value={t.id}>
-                                                {t.term_name} {t.year_name ? `(${t.year_name})` : ''}
-                                            </option>
-                                        ))}
-                                    </select>
-                                    <small className="text-muted fs-8 mt-1 d-block">Select the academic term this subject applies to.</small>
-                                </div>
-
                                 {/* Class Selection */}
                                 <div className="mb-3">
-                                    <label className="form-label fw-bold" style={{ color: 'var(--primary-dark)' }}>
-                                        Select Class <span className="text-danger">*</span>
-                                    </label>
+                                    <label className="form-label fw-bold" style={{ color: 'var(--primary-dark)' }}>Select Class (Filter)</label>
                                     <select
                                         className="form-select"
                                         value={form.class_id}
@@ -336,7 +272,7 @@ export default function SubjectSettings() {
                                     <input
                                         type="text"
                                         className="form-control"
-                                        placeholder="e.g. Science"
+                                        placeholder="e.g. Mathematics"
                                         value={form.subject_name}
                                         onChange={e => setForm({ ...form, subject_name: e.target.value })}
                                         required
@@ -349,7 +285,7 @@ export default function SubjectSettings() {
                                     <input
                                         type="text"
                                         className="form-control"
-                                        placeholder="e.g. 0004"
+                                        placeholder="e.g. MTH-101"
                                         value={form.subject_code}
                                         onChange={e => setForm({ ...form, subject_code: e.target.value })}
                                         required
@@ -414,155 +350,88 @@ export default function SubjectSettings() {
                 {/* RIGHT COLUMN: LIST */}
                 <div className="col-md-8 animate__animated animate__fadeInRight">
                     <div className="card shadow-lg border-0 rounded-4">
-                        <div className="card-header bg-white p-4 border-bottom-0 d-flex flex-wrap align-items-center justify-content-between gap-3">
+                        <div className="card-header bg-white p-4 border-bottom-0">
                             <h5 className="mb-0 fw-bold" style={{ color: 'var(--primary-dark)' }}>
-                                <i className="bi bi-diagram-3-fill me-2" style={{ color: 'var(--primary-teal)' }}></i>
-                                Subject List (Term → Class → Section)
+                                <i className="bi bi-list-task me-2" style={{ color: 'var(--primary-teal)' }}></i>
+                                Subject List (Hierarchical)
                             </h5>
-
-                            {/* Term Filter Pills */}
-                            <div className="d-flex flex-wrap gap-1">
-                                <button
-                                    className={`btn btn-sm ${selectedTermFilter === 'ALL' ? 'btn-primary' : 'btn-outline-secondary'}`}
-                                    onClick={() => setSelectedTermFilter('ALL')}
-                                    style={{ borderRadius: '20px', fontSize: '0.82rem' }}
-                                >
-                                    All Terms
-                                </button>
-                                {availableTermNames.map(tn => (
-                                    <button
-                                        key={tn}
-                                        className={`btn btn-sm ${selectedTermFilter === tn ? 'btn-primary' : 'btn-outline-secondary'}`}
-                                        onClick={() => setSelectedTermFilter(tn)}
-                                        style={{ borderRadius: '20px', fontSize: '0.82rem' }}
-                                    >
-                                        {tn}
-                                    </button>
-                                ))}
-                            </div>
                         </div>
-
-                        <div className="card-body p-3">
-                            {/* Term -> Class -> Section -> Subjects Tree View */}
-                            <div className="accordion accordion-flush" id="termsAccordion">
+                        <div className="card-body p-0">
+                            {/* Tree View */}
+                            <div className="accordion accordion-flush" id="subjectsAccordion">
                                 {Object.keys(groupedData).length === 0 ? (
                                     <div className="text-center p-5 text-muted">
-                                        No subjects found for the selected term filter.
+                                        No subjects added yet. Start by adding one from the left panel.
                                     </div>
                                 ) : (
-                                    Object.entries(groupedData).map(([termName, classMap], termIdx) => (
-                                        <div className="accordion-item border rounded-3 mb-3 overflow-hidden shadow-sm" key={termName}>
+                                    Object.entries(groupedData).map(([className, sectionMap], classIdx) => (
+                                        <div className="accordion-item border-0 mb-2" key={className}>
                                             <h2 className="accordion-header">
                                                 <button
-                                                    className={`accordion-button fw-bold fs-6 ${termIdx !== 0 ? 'collapsed' : ''}`}
+                                                    className={`accordion-button rounded-3 fw-bold ${classIdx !== 0 ? 'collapsed' : ''}`}
                                                     type="button"
                                                     data-bs-toggle="collapse"
-                                                    data-bs-target={`#collapseTerm-${termIdx}`}
-                                                    style={{ backgroundColor: '#1e3644', color: '#ffffff' }}
+                                                    data-bs-target={`#collapseClass-${classIdx}`}
+                                                    style={{ backgroundColor: 'var(--bg-main)', color: 'var(--primary-dark)' }}
                                                 >
-                                                    <i className="bi bi-calendar2-range-fill me-2 text-warning"></i>
-                                                    Term: {termName}
-                                                    <span className="badge bg-light text-dark ms-auto me-3 fs-8">
-                                                        {Object.values(classMap).reduce((tot, secMap) => tot + Object.values(secMap).reduce((sTot, subs) => sTot + subs.length, 0), 0)} Subjects
-                                                    </span>
+                                                    <i className="bi bi-mortarboard-fill me-2" style={{ color: 'var(--accent-orange)' }}></i>
+                                                    {className}
                                                 </button>
                                             </h2>
-
                                             <div
-                                                id={`collapseTerm-${termIdx}`}
-                                                className={`accordion-collapse collapse ${termIdx === 0 ? 'show' : ''}`}
+                                                id={`collapseClass-${classIdx}`}
+                                                className={`accordion-collapse collapse ${classIdx === 0 ? 'show' : ''}`}
                                             >
-                                                <div className="accordion-body p-3 bg-light">
-                                                    {/* Nested Accordion for Classes */}
-                                                    <div className="accordion accordion-flush" id={`classesAccordion-${termIdx}`}>
-                                                        {Object.entries(classMap).map(([className, sectionMap], classIdx) => (
-                                                            <div className="accordion-item border rounded-3 mb-2 overflow-hidden bg-white" key={className}>
-                                                                <h3 className="accordion-header">
-                                                                    <button
-                                                                        className={`accordion-button py-2.5 px-3 fw-bold ${classIdx !== 0 ? 'collapsed' : ''}`}
-                                                                        type="button"
-                                                                        data-bs-toggle="collapse"
-                                                                        data-bs-target={`#collapseClass-${termIdx}-${classIdx}`}
-                                                                        style={{ backgroundColor: '#f0fdf4', color: '#166534' }}
-                                                                    >
-                                                                        <i className="bi bi-mortarboard-fill me-2" style={{ color: '#15803d' }}></i>
-                                                                        {className}
-                                                                    </button>
-                                                                </h3>
+                                                <div className="accordion-body p-0">
+                                                    {Object.entries(sectionMap).map(([sectionName, classSubjects]) => (
+                                                        <div key={sectionName} className="p-3 ps-5 border-bottom bg-white">
+                                                            <h6 className="fw-bold text-uppercase fs-7 mb-3" style={{ color: 'var(--primary-teal)' }}>
+                                                                <i className="bi bi-puzzle me-2"></i>
+                                                                Section: {sectionName}
+                                                            </h6>
 
-                                                                <div
-                                                                    id={`collapseClass-${termIdx}-${classIdx}`}
-                                                                    className={`accordion-collapse collapse ${classIdx === 0 ? 'show' : ''}`}
-                                                                >
-                                                                    <div className="accordion-body p-0">
-                                                                        {Object.entries(sectionMap).map(([sectionName, classSubjects]) => (
-                                                                            <div key={sectionName} className="p-3 border-bottom bg-white">
-                                                                                <div className="d-flex align-items-center justify-content-between mb-2">
-                                                                                    <h6 className="fw-bold text-uppercase fs-7 mb-0" style={{ color: 'var(--primary-teal)' }}>
-                                                                                        <i className="bi bi-puzzle me-2"></i>
-                                                                                        Section: {sectionName}
-                                                                                    </h6>
-                                                                                    <span className="badge bg-secondary fs-8">
-                                                                                        {classSubjects.length} {classSubjects.length === 1 ? 'subject' : 'subjects'}
-                                                                                    </span>
-                                                                                </div>
-
-                                                                                <div className="table-responsive">
-                                                                                    <table className="table table-hover align-middle table-sm border-start border-3 mb-0" style={{ borderColor: 'var(--primary-teal)' }}>
-                                                                                        <thead className="table-light">
-                                                                                            <tr>
-                                                                                                <th className="ps-3">Subject Name</th>
-                                                                                                <th>Code</th>
-                                                                                                <th>Term</th>
-                                                                                                <th className="text-end pe-3">Actions</th>
-                                                                                            </tr>
-                                                                                        </thead>
-                                                                                        <tbody>
-                                                                                            {classSubjects.map((sub) => (
-                                                                                                <tr key={sub.subject_id}>
-                                                                                                    <td className="ps-3 fw-medium">{sub.subject_name}</td>
-                                                                                                    <td>
-                                                                                                        <span className="badge" style={{ backgroundColor: 'var(--primary-dark)' }}>
-                                                                                                            {sub.subject_code}
-                                                                                                        </span>
-                                                                                                    </td>
-                                                                                                    <td>
-                                                                                                        <span className="badge bg-info text-dark">
-                                                                                                            {sub.term_name || 'General'}
-                                                                                                        </span>
-                                                                                                    </td>
-                                                                                                    <td className="text-end pe-3">
-                                                                                                        {hasPermission('academic', 'write') && (
-                                                                                                            <button
-                                                                                                                className="btn btn-sm btn-outline-warning me-2"
-                                                                                                                onClick={() => handleEdit(sub)}
-                                                                                                                title="Edit"
-                                                                                                            >
-                                                                                                                <i className="bi bi-pencil-fill"></i>
-                                                                                                            </button>
-                                                                                                        )}
-                                                                                                        {hasPermission('academic', 'delete') && (
-                                                                                                            <button
-                                                                                                                className="btn btn-sm btn-outline-danger"
-                                                                                                                onClick={() => handleDelete(sub.subject_id)}
-                                                                                                                title="Delete"
-                                                                                                            >
-                                                                                                                <i className="bi bi-trash-fill"></i>
-                                                                                                            </button>
-                                                                                                        )}
-                                                                                                    </td>
-                                                                                                </tr>
-                                                                                            ))}
-                                                                                        </tbody>
-                                                                                    </table>
-                                                                                </div>
-                                                                            </div>
+                                                            <div className="table-responsive">
+                                                                <table className="table table-hover align-middle table-sm border-start border-3" style={{ borderColor: 'var(--primary-teal)' }}>
+                                                                    <thead className="table-light">
+                                                                        <tr>
+                                                                            <th className="ps-3">Subject Name</th>
+                                                                            <th>Code</th>
+                                                                            <th className="text-end pe-3">Actions</th>
+                                                                        </tr>
+                                                                    </thead>
+                                                                    <tbody>
+                                                                        {classSubjects.map((sub) => (
+                                                                            <tr key={sub.subject_id}>
+                                                                                <td className="ps-3 fw-medium">{sub.subject_name}</td>
+                                                                                <td><span className="badge" style={{ backgroundColor: 'var(--primary-dark)' }}>{sub.subject_code}</span></td>
+                                                                                {/* Marks Removed */}
+                                                                                <td className="text-end pe-3">
+                                                                                    {hasPermission('academic', 'write') && (
+                                                                                        <button
+                                                                                            className="btn btn-sm btn-outline-warning me-2"
+                                                                                            onClick={() => handleEdit(sub)}
+                                                                                            title="Edit"
+                                                                                        >
+                                                                                            <i className="bi bi-pencil-fill"></i>
+                                                                                        </button>
+                                                                                    )}
+                                                                                    {hasPermission('academic', 'delete') && (
+                                                                                        <button
+                                                                                            className="btn btn-sm btn-outline-danger"
+                                                                                            onClick={() => handleDelete(sub.subject_id)}
+                                                                                            title="Delete"
+                                                                                        >
+                                                                                            <i className="bi bi-trash-fill"></i>
+                                                                                        </button>
+                                                                                    )}
+                                                                                </td>
+                                                                            </tr>
                                                                         ))}
-                                                                    </div>
-                                                                </div>
+                                                                    </tbody>
+                                                                </table>
                                                             </div>
-                                                        ))}
-                                                    </div>
+                                                        </div>
+                                                    ))}
                                                 </div>
                                             </div>
                                         </div>
@@ -576,3 +445,4 @@ export default function SubjectSettings() {
         </div>
     );
 }
+

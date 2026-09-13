@@ -12,17 +12,12 @@ const PORT = process.env.PORT || 5000;
 initScheduler();
 
 // Middleware
-app.use(cors({
-    origin: true, // Reflect request origin dynamically
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin']
-}));
-app.options('*', cors()); // Pre-flight options handler
-
+app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use('/uploads', express.static('uploads')); // Serve uploaded files
+
+
 
 // Routes
 // Dashboard Route
@@ -31,8 +26,6 @@ app.use('/dashboard', require('./routes/dashboard'));
 app.use('/students', require('./routes/students'));
 // HRM Routes
 app.use('/hrm', require('./routes/hrm'));
-// Academic Routes & Terms
-app.use('/academic', require('./routes/academic'));
 // Classes/Sections Routes
 app.use('/academic', require('./routes/classes'));
 // Subjects Routes
@@ -41,6 +34,8 @@ app.use('/academic/subjects', require('./routes/subjects'));
 app.use('/academic/teachers', require('./routes/teachers'));
 // Settings Routes
 app.use('/settings', require('./routes/settings'));
+// Academic Routes
+app.use('/academic', require('./routes/academic'));
 app.use('/promotion', require('./routes/promotion'));
 // Auth Routes
 app.use('/auth', require('./routes/auth'));
@@ -62,12 +57,8 @@ app.use('/attendance', require('./routes/attendance'));
 app.use('/exams', require('./routes/exams'));
 // Reports Module Routes
 app.use('/reports', require('./routes/reports'));
-
-// Global Error Handler
-app.use((err, req, res, next) => {
-    console.error('Unhandled Server Error:', err);
-    res.status(500).json({ message: 'Internal Server Error', error: err.message });
-});
+// Notifications Module Route
+app.use('/notifications', require('./routes/notifications'));
 
 app.get('/', (req, res) => {
     res.send('Smart School System API is running');
@@ -118,6 +109,10 @@ const { runEssentialMigrations } = require('./migrations');
 
 app.listen(PORT, '0.0.0.0', async () => {
     console.log(`Server is running on port ${PORT}`);
-    await runEssentialMigrations();
-    await seedRootUser();
+    try {
+        await runEssentialMigrations();
+        await seedRootUser();
+    } catch (err) {
+        console.error('❌ Startup Database Error (Check DATABASE_URL & Supabase status):', err.message);
+    }
 });

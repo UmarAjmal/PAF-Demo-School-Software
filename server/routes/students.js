@@ -97,7 +97,7 @@ router.get('/search-siblings', async (req, res) => {
                 s.gender,
                 s.dob,
                 s.family_id,
-                s.monthly_fee,
+                COALESCE(NULLIF(s.monthly_fee, 0), f.family_fee, 0) AS monthly_fee,
                 s.class_id,
                 s.image_url,
                 s.current_address,
@@ -178,6 +178,7 @@ router.get('/:id/siblings', async (req, res) => {
                 s.mother_name,
                 s.gender,
                 s.dob,
+                s.status,
                 s.family_id,
                 s.sibling_relation,
                 s.class_id,
@@ -673,6 +674,298 @@ router.post('/families/manual-link', async (req, res) => {
 });
 
 
+// GET /students/families-directory list all families with children, classes, sections, parents info
+router.get('/families-directory', async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT 
+                s.student_id,
+                s.family_id,
+                s.admission_no,
+                s.first_name,
+                s.last_name,
+                s.father_name,
+                s.father_phone,
+                s.father_cnic,
+                s.father_occupation,
+                s.mother_name,
+                s.mother_phone,
+                s.mother_cnic,
+                s.mother_occupation,
+                s.guardian_name,
+                s.guardian_phone,
+                s.guardian_relation,
+                s.current_address,
+                s.gender,
+                s.dob,
+                s.status,
+                s.category,
+                s.monthly_fee,
+                c.class_id,
+                c.class_name,
+                sec.section_id,
+                sec.section_name,
+                f.family_fee,
+                f.opening_balance,
+                f.opening_balance_paid,
+                GREATEST(0, COALESCE(f.opening_balance, 0) - COALESCE(f.opening_balance_paid, 0)) AS opb_remaining
+            FROM students s
+            LEFT JOIN classes c ON s.class_id = c.class_id
+            LEFT JOIN sections sec ON s.section_id = sec.section_id
+            LEFT JOIN families f ON s.family_id = f.family_id
+            WHERE s.family_id IS NOT NULL 
+              AND TRIM(s.family_id) != ''
+              AND LOWER(COALESCE(s.status, 'Active')) = 'active'
+            ORDER BY s.family_id, c.class_id DESC NULLS LAST, s.admission_no ASC
+        `);
+
+        const familiesMap = {};
+
+        for (const s of result.rows) {
+            const fid = s.family_id.trim();
+            if (!familiesMap[fid]) {
+                familiesMap[fid] = {
+                    family_id: fid,
+                    family_fee: parseFloat(s.family_fee || 0),
+                    opening_balance: parseFloat(s.opening_balance || 0),
+                    opening_balance_paid: parseFloat(s.opening_balance_paid || 0),
+                    opb_remaining: parseFloat(s.opb_remaining || 0),
+                    members: []
+                };
+            }
+            const isTrusted = (s.category || '').trim().toLowerCase() === 'trusted';
+            familiesMap[fid].members.push({
+                student_id: s.student_id,
+                admission_no: s.admission_no,
+                first_name: s.first_name || '',
+                last_name: s.last_name || '',
+                full_name: `${s.first_name || ''} ${s.last_name || ''}`.trim(),
+                category: s.category || 'Normal',
+                is_trusted: isTrusted,
+                monthly_fee: parseFloat(s.monthly_fee || 0),
+                father_name: (s.father_name || '').trim(),
+                father_phone: (s.father_phone || '').trim(),
+                father_cnic: (s.father_cnic || '').trim(),
+                mother_name: (s.mother_name || '').trim(),
+                mother_phone: (s.mother_phone || '').trim(),
+                mother_cnic: (s.mother_cnic || '').trim(),
+                guardian_name: (s.guardian_name || '').trim(),
+                guardian_phone: (s.guardian_phone || '').trim(),
+                current_address: (s.current_address || '').trim(),
+                class_id: s.class_id,
+                class_name: s.class_name || 'N/A',
+                section_id: s.section_id,
+                section_name: s.section_name || 'N/A',
+                status: s.status || 'Active'
+            });
+        }
+
+        // Query overall fee statistics per family across all generated monthly fee slips
+        const feeStatsRes = await pool.query(`
+            SELECT 
+                f.family_id,
+                COALESCE(SUM(ms.total_amount), 0) + COALESCE(f.opening_balance, 0) AS total_billed,
+                COALESCE(SUM(ms.paid_amount), 0) AS total_paid,
+                GREATEST(0, (COALESCE(SUM(ms.total_amount), 0) + COALESCE(f.opening_balance, 0)) - COALESCE(SUM(ms.paid_amount), 0)) AS total_balance
+            FROM families f
+            LEFT JOIN monthly_fee_slips ms ON (ms.family_id = f.family_id OR ms.student_id IN (SELECT student_id FROM students WHERE family_id = f.family_id))
+            GROUP BY f.family_id, f.opening_balance
+        `);
+
+        const feeStatsMap = {};
+        for (const r of feeStatsRes.rows) {
+            const fid = (r.family_id || '').trim();
+            const billed = parseFloat(r.total_billed || 0);
+            const paid = parseFloat(r.total_paid || 0);
+            const balance = parseFloat(r.total_balance || 0);
+            let status = 'paid';
+            if (balance > 0 && paid > 0) {
+                status = 'partial';
+            } else if (balance > 0) {
+                status = 'unpaid';
+            }
+            feeStatsMap[fid] = {
+                total_billed: billed,
+                total_paid: paid,
+                total_balance: balance,
+                fee_status: status
+            };
+        }
+
+        const familiesList = Object.values(familiesMap)
+            .filter(fam => fam.members && fam.members.length > 0)
+            .map(fam => {
+            const members = fam.members;
+
+            // Distinct Fathers & Multi-Household (Cousin) Detection
+            const fatherMap = new Map();
+            members.forEach(m => {
+                const fn = (m.father_name || '').trim();
+                if (fn) {
+                    if (!fatherMap.has(fn)) {
+                        fatherMap.set(fn, {
+                            name: fn,
+                            phone: (m.father_phone || '').trim(),
+                            cnic: (m.father_cnic || '').trim(),
+                            count: 1
+                        });
+                    } else {
+                        const existing = fatherMap.get(fn);
+                        existing.count++;
+                        if (!existing.phone && m.father_phone) existing.phone = m.father_phone.trim();
+                    }
+                }
+            });
+
+            const fathersList = Array.from(fatherMap.values());
+            const isCousinFamily = fathersList.length > 1;
+
+            // Majority Father Name logic:
+            let primaryFatherName = '';
+            let maxCount = 0;
+            fathersList.forEach(f => {
+                if (f.count > maxCount) {
+                    maxCount = f.count;
+                    primaryFatherName = f.name;
+                }
+            });
+
+            if (!primaryFatherName) {
+                primaryFatherName = members.find(m => m.father_name)?.father_name ||
+                    members.find(m => m.guardian_name)?.guardian_name ||
+                    `Family (${fam.family_id})`;
+            }
+
+            const combinedFatherNames = isCousinFamily 
+                ? fathersList.map(f => f.name).join(' & ') 
+                : primaryFatherName;
+
+            // Majority Mother Name
+            const motherCounts = {};
+            members.forEach(m => {
+                if (m.mother_name) {
+                    motherCounts[m.mother_name] = (motherCounts[m.mother_name] || 0) + 1;
+                }
+            });
+            let primaryMotherName = '';
+            let maxMCount = 0;
+            for (const [mn, count] of Object.entries(motherCounts)) {
+                if (count > maxMCount) {
+                    maxMCount = count;
+                    primaryMotherName = mn;
+                }
+            }
+            if (!primaryMotherName) {
+                primaryMotherName = members.find(m => m.mother_name)?.mother_name || '—';
+            }
+
+            // Contact Phones
+            const fatherPhone = members.find(m => m.father_phone)?.father_phone || '';
+            const motherPhone = members.find(m => m.mother_phone)?.mother_phone || '';
+            const guardianPhone = members.find(m => m.guardian_phone)?.guardian_phone || '';
+            const primaryPhone = fatherPhone || motherPhone || guardianPhone || '';
+
+            const uniquePhones = Array.from(new Set(
+                fathersList.map(f => f.phone).concat([fatherPhone, motherPhone, guardianPhone]).filter(Boolean)
+            ));
+            const combinedPhones = uniquePhones.join(', ');
+
+            // Children list, Classes, Sections
+            const childrenNames = members.map(m => m.full_name);
+            const classesList = members.map(m => m.class_name);
+            const sectionsList = members.map(m => m.section_name);
+
+            // Trusted category evaluation
+            const isAllTrusted = members.length > 0 && members.every(m => m.is_trusted);
+            const hasTrusted = members.some(m => m.is_trusted);
+
+            const feeStat = feeStatsMap[fam.family_id] || { total_billed: 0, total_paid: 0, total_balance: 0, fee_status: 'paid' };
+
+            let finalFeeStatus = feeStat.fee_status;
+            let finalBilled = feeStat.total_billed;
+            let finalPaid = feeStat.total_paid;
+            let finalBalance = feeStat.total_balance;
+
+            if (isAllTrusted) {
+                if (finalBalance <= 0 && finalBilled <= 0) {
+                    finalFeeStatus = 'settled';
+                    finalBilled = 0;
+                    finalPaid = 0;
+                    finalBalance = 0;
+                } else if (finalBalance <= 0) {
+                    finalFeeStatus = 'settled';
+                }
+            } else if (finalBalance === 0) {
+                finalFeeStatus = 'paid';
+            }
+
+            // Effective monthly tuition fee calculation
+            const memberMonthlySum = members
+                .filter(m => (m.status || '').toLowerCase() === 'active' && !m.is_trusted)
+                .reduce((sum, m) => sum + (parseFloat(m.monthly_fee) || 0), 0);
+            const effectiveMonthlyFee = fam.family_fee > 0 ? fam.family_fee : memberMonthlySum;
+
+            return {
+                family_id: fam.family_id,
+                family_name: primaryFatherName,
+                father_name: primaryFatherName,
+                mother_name: primaryMotherName,
+                father_phone: fatherPhone,
+                mother_phone: motherPhone,
+                guardian_phone: guardianPhone,
+                primary_phone: primaryPhone,
+                is_cousin_family: isCousinFamily,
+                is_trusted_family: isAllTrusted,
+                has_trusted_members: hasTrusted,
+                fathers_list: fathersList,
+                combined_father_names: combinedFatherNames,
+                combined_phones: combinedPhones,
+                total_children: members.length,
+                active_children: members.length,
+                lead_student: members[0] || null,
+                children_names: childrenNames,
+                classes_list: classesList,
+                sections_list: sectionsList,
+                family_fee: fam.family_fee,
+                effective_monthly_fee: effectiveMonthlyFee,
+                opening_balance: fam.opening_balance,
+                opening_balance_paid: fam.opening_balance_paid,
+                opb_remaining: fam.opb_remaining,
+                total_billed: finalBilled,
+                total_paid: finalPaid,
+                total_balance: finalBalance,
+                fee_status: finalFeeStatus,
+                members: members
+            };
+        });
+
+        // Sequence Sort: Unpaid (1) -> Partial (2) -> Paid (3) -> Settled (4)
+        const statusPriority = { unpaid: 1, partial: 2, paid: 3, settled: 4, satteled: 4 };
+
+        familiesList.sort((a, b) => {
+            const pA = statusPriority[a.fee_status] || 3;
+            const pB = statusPriority[b.fee_status] || 3;
+            if (pA !== pB) return pA - pB;
+            return a.family_id.localeCompare(b.family_id, undefined, { numeric: true });
+        });
+
+        const totalStudents = familiesList.reduce((sum, f) => sum + f.members.length, 0);
+        const totalFamilies = familiesList.length;
+
+        res.json({
+            families: familiesList,
+            stats: {
+                total_families: totalFamilies,
+                total_students: totalStudents,
+                average_family_size: totalFamilies > 0 ? (totalStudents / totalFamilies).toFixed(1) : 0
+            }
+        });
+    } catch (err) {
+        console.error('Error fetching families directory:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // GET /students/families/:family_id get family info including family_fee and members
 router.get('/families/:family_id', async (req, res) => {
     try {
@@ -715,13 +1008,28 @@ router.put('/families/:family_id/fee', async (req, res) => {
         if (family_fee === undefined || family_fee === null || isNaN(parseFloat(family_fee))) {
             return res.status(400).json({ error: 'family_fee is required and must be a number' });
         }
+        const parsedFee = parseFloat(family_fee);
         // Upsert families record
         const result = await pool.query(`
             INSERT INTO families (family_id, family_fee)
             VALUES ($1, $2)
             ON CONFLICT (family_id) DO UPDATE SET family_fee = EXCLUDED.family_fee
             RETURNING *
-        `, [family_id, parseFloat(family_fee)]);
+        `, [family_id, parsedFee]);
+
+        if (parsedFee > 0) {
+            // Also update any student in this family whose monthly_fee is 0 or if there is only 1 active student
+            await pool.query(`
+                UPDATE students
+                SET monthly_fee = $2
+                WHERE family_id = $1 AND (
+                    monthly_fee IS NULL 
+                    OR monthly_fee <= 0 
+                    OR (SELECT COUNT(*) FROM students s2 WHERE s2.family_id = $1 AND LOWER(COALESCE(s2.status, 'Active')) = 'active') = 1
+                )
+            `, [family_id, parsedFee]);
+        }
+
         res.json(result.rows[0]);
     } catch (err) {
         console.error(err.message);
@@ -772,6 +1080,10 @@ router.post('/', upload.fields([{ name: 'image', maxCount: 1 }, { name: 'documen
         }
 
         await client.query('BEGIN');
+
+        // Automatically sync PostgreSQL primary key sequences to prevent duplicate ID collisions
+        const { syncAllSequences } = require('../utils/sequenceSync');
+        await syncAllSequences(client);
 
         const dateObj = admission_date ? new Date(admission_date) : new Date();
         const month = dateObj.toLocaleString('en-US', { month: 'short' }).toUpperCase();
@@ -950,13 +1262,23 @@ router.post('/', upload.fields([{ name: 'image', maxCount: 1 }, { name: 'documen
                 father_name, father_phone, father_cnic, father_occupation,
                 mother_name, mother_phone, mother_cnic, mother_occupation,
                 is_orphan === 'true' || is_orphan === true, guardian_name, guardian_relation, guardian_phone, guardian_cnic, guardian_address,
-                monthly_fee || 0, admission_fee || 0, other_charges || 0,
+                (parseFloat(monthly_fee) > 0 ? parseFloat(monthly_fee) : (familyFeeVal > 0 ? familyFeeVal : 0)),
+                admission_fee || 0, other_charges || 0,
                 image_url, JSON.stringify(documents), user_id,
                 family_id, final_sibling_relation
             ]
         );
 
         const new_student_id = newStudent.rows[0].student_id;
+
+        // If family fee is set, ensure all siblings in this family also have positive monthly_fee
+        if (familyFeeVal > 0) {
+            await client.query(`
+                UPDATE students
+                SET monthly_fee = $2
+                WHERE family_id = $1 AND (monthly_fee IS NULL OR monthly_fee <= 0)
+            `, [family_id, familyFeeVal]);
+        }
 
         // Create sibling relationships for all siblings
         if (siblingsArray.length > 0) {
@@ -1307,7 +1629,7 @@ router.post('/bulk', async (req, res) => {
 // 3. Get All Students (With Filters)
 router.get('/', async (req, res) => {
     try {
-        const { class_id, section_id, gender, keyword, category, status, blood_group, is_orphan, family_id } = req.query;
+        const { class_id, section_id, gender, keyword, category, status, blood_group, is_orphan, family_id, age, religion } = req.query;
 
         let query = `
             SELECT s.*, c.class_name, sec.section_name, u.username, u.plain_password as system_pwd
@@ -1315,87 +1637,97 @@ router.get('/', async (req, res) => {
             LEFT JOIN classes c ON s.class_id = c.class_id
             LEFT JOIN sections sec ON s.section_id = sec.section_id
             LEFT JOIN app_users u ON s.user_id = u.id 
-              WHERE 1=1`;
+            WHERE 1=1`;
         const params = [];
         let paramCount = 1;
 
-        if (class_id) {
+        if (class_id && class_id.trim() !== '') {
             query += ` AND s.class_id = $${paramCount}`;
-            params.push(class_id);
+            params.push(class_id.trim());
             paramCount++;
         }
 
-        if (section_id) {
+        if (section_id && section_id.trim() !== '') {
             query += ` AND s.section_id = $${paramCount}`;
-            params.push(section_id);
+            params.push(section_id.trim());
             paramCount++;
         }
 
-        if (gender) {
-            query += ` AND s.gender = $${paramCount}`;
-            params.push(gender);
+        if (gender && gender.trim() !== '') {
+            query += ` AND LOWER(TRIM(s.gender)) = LOWER($${paramCount})`;
+            params.push(gender.trim());
             paramCount++;
         }
 
-        if (category) {
-            query += ` AND s.category = $${paramCount}`;
-            params.push(category);
+        if (category && category.trim() !== '') {
+            query += ` AND LOWER(TRIM(s.category)) = LOWER($${paramCount})`;
+            params.push(category.trim());
             paramCount++;
         }
 
-        if (status) {
-            query += ` AND s.status = $${paramCount}`;
-            params.push(status);
+        if (status && status.trim() !== '') {
+            query += ` AND LOWER(TRIM(s.status)) = LOWER($${paramCount})`;
+            params.push(status.trim());
             paramCount++;
         }
 
-        if (blood_group) {
-            query += ` AND s.blood_group = $${paramCount}`;
-            params.push(blood_group);
+        if (blood_group && blood_group.trim() !== '') {
+            query += ` AND LOWER(TRIM(s.blood_group)) = LOWER($${paramCount})`;
+            params.push(blood_group.trim());
             paramCount++;
         }
 
-        if (is_orphan) {
+        if (is_orphan !== undefined && is_orphan !== null && is_orphan !== '') {
             query += ` AND s.is_orphan = $${paramCount}`;
-            params.push(is_orphan === 'true');
+            params.push(is_orphan === 'true' || is_orphan === true);
             paramCount++;
         }
 
-        if (family_id) {
+        if (family_id && family_id.trim() !== '') {
             query += ` AND s.family_id ILIKE $${paramCount}`;
-            params.push(`%${family_id}%`);
+            params.push(`%${family_id.trim()}%`);
             paramCount++;
         }
 
-        if (keyword) {
+        if (keyword && keyword.trim() !== '') {
+            const kw = keyword.trim();
             query += ` AND (
                 s.first_name ILIKE $${paramCount} OR 
                 s.last_name ILIKE $${paramCount} OR 
+                CONCAT(s.first_name, ' ', s.last_name) ILIKE $${paramCount} OR
+                CONCAT(s.last_name, ' ', s.first_name) ILIKE $${paramCount} OR
                 s.admission_no ILIKE $${paramCount} OR
-                s.father_name ILIKE $${paramCount}
+                s.roll_no ILIKE $${paramCount} OR
+                s.father_name ILIKE $${paramCount} OR
+                s.mother_name ILIKE $${paramCount} OR
+                s.guardian_name ILIKE $${paramCount} OR
+                s.student_mobile ILIKE $${paramCount} OR
+                s.father_phone ILIKE $${paramCount} OR
+                s.family_id ILIKE $${paramCount} OR
+                u.username ILIKE $${paramCount}
             )`;
-            params.push(`%${keyword}%`);
+            params.push(`%${kw}%`);
             paramCount++;
         }
 
-        if (req.query.age) {
-            query += ` AND EXTRACT(YEAR FROM AGE(CURRENT_DATE, s.dob)) = $${paramCount}`;
-            params.push(req.query.age);
+        if (age && age.toString().trim() !== '' && !isNaN(parseInt(age.toString()))) {
+            query += ` AND s.dob IS NOT NULL AND EXTRACT(YEAR FROM AGE(CURRENT_DATE, s.dob)) = $${paramCount}::int`;
+            params.push(parseInt(age.toString()));
             paramCount++;
         }
 
-        if (req.query.religion) {
-            query += ` AND s.religion = $${paramCount}`;
-            params.push(req.query.religion);
+        if (religion && religion.trim() !== '') {
+            query += ` AND LOWER(TRIM(s.religion)) = LOWER($${paramCount})`;
+            params.push(religion.trim());
             paramCount++;
         }
 
-        query += ` ORDER BY s.class_id, s.section_id, s.roll_no, s.first_name`;
+        query += ` ORDER BY s.class_id NULLS LAST, s.section_id NULLS LAST, s.roll_no NULLS LAST, s.first_name`;
 
         const result = await pool.query(query, params);
         res.json(result.rows);
     } catch (err) {
-        console.error(err.message);
+        console.error("Error in GET /students:", err.message);
         res.status(500).json({ error: "Server Error" });
     }
 });
@@ -1421,7 +1753,11 @@ router.get('/:id', async (req, res) => {
         `, [id]);
 
         if (student.rows.length === 0) return res.status(404).json({ error: "Student not found" });
-        res.json(student.rows[0]);
+        const studentData = student.rows[0];
+        if (parseFloat(studentData.monthly_fee || 0) <= 0 && parseFloat(studentData.family_fee || 0) > 0) {
+            studentData.monthly_fee = studentData.family_fee;
+        }
+        res.json(studentData);
     } catch (err) {
         console.error(err.message);
         res.status(500).json({ error: "Server Error" });
@@ -1442,7 +1778,7 @@ router.put('/:id', upload.fields([{ name: 'image', maxCount: 1 }, { name: 'docum
             mother_name, mother_phone, mother_cnic, mother_occupation,
             is_orphan, guardian_name, guardian_relation, guardian_phone, guardian_cnic, guardian_address,
             monthly_fee, admission_fee, other_charges,
-            family_fee
+            family_fee, opening_balance
         } = req.body;
 
         // Handle Files
@@ -1475,15 +1811,46 @@ router.put('/:id', upload.fields([{ name: 'image', maxCount: 1 }, { name: 'docum
             WHERE student_id=$39 RETURNING user_id, family_id`;
 
         const vals = [
-            roll_no, class_id, section_id, admission_date, category,
-            first_name, last_name, gender, dob, cnic_bform,
-            religion, blood_group, has_disability === 'true' || has_disability === true, disability_details,
-            mobile_no, email, current_address, permanent_address, city,
-            father_name, father_phone, father_cnic, father_occupation,
-            mother_name, mother_phone, mother_cnic, mother_occupation,
-            is_orphan === 'true' || is_orphan === true, guardian_name, guardian_relation, guardian_phone, guardian_cnic, guardian_address,
-            monthly_fee || 0, admission_fee || 0, other_charges || 0,
-            image_url, JSON.stringify(documents),
+            roll_no && String(roll_no).trim() !== '' ? String(roll_no).trim() : null,
+            class_id && !isNaN(parseInt(class_id, 10)) ? parseInt(class_id, 10) : null,
+            section_id && !isNaN(parseInt(section_id, 10)) ? parseInt(section_id, 10) : null,
+            admission_date && String(admission_date).trim() !== '' ? String(admission_date).trim() : null,
+            category || 'Normal',
+            first_name ? String(first_name).trim() : '',
+            last_name && String(last_name).trim() !== '' ? String(last_name).trim() : null,
+            gender && String(gender).trim() !== '' ? String(gender).trim() : null,
+            dob && String(dob).trim() !== '' ? String(dob).trim() : null,
+            cnic_bform && String(cnic_bform).trim() !== '' ? String(cnic_bform).trim() : null,
+            religion && String(religion).trim() !== '' ? String(religion).trim() : null,
+            blood_group && String(blood_group).trim() !== '' ? String(blood_group).trim() : null,
+            has_disability === 'true' || has_disability === true,
+            disability_details && String(disability_details).trim() !== '' ? String(disability_details).trim() : null,
+            mobile_no && String(mobile_no).trim() !== '' ? String(mobile_no).trim() : null,
+            email && String(email).trim() !== '' ? String(email).trim() : null,
+            current_address && String(current_address).trim() !== '' ? String(current_address).trim() : null,
+            permanent_address && String(permanent_address).trim() !== '' ? String(permanent_address).trim() : null,
+            city && String(city).trim() !== '' ? String(city).trim() : null,
+            father_name && String(father_name).trim() !== '' ? String(father_name).trim() : null,
+            father_phone && String(father_phone).trim() !== '' ? String(father_phone).trim() : null,
+            father_cnic && String(father_cnic).trim() !== '' ? String(father_cnic).trim() : null,
+            father_occupation && String(father_occupation).trim() !== '' ? String(father_occupation).trim() : null,
+            mother_name && String(mother_name).trim() !== '' ? String(mother_name).trim() : null,
+            mother_phone && String(mother_phone).trim() !== '' ? String(mother_phone).trim() : null,
+            mother_cnic && String(mother_cnic).trim() !== '' ? String(mother_cnic).trim() : null,
+            mother_occupation && String(mother_occupation).trim() !== '' ? String(mother_occupation).trim() : null,
+            is_orphan === 'true' || is_orphan === true,
+            guardian_name && String(guardian_name).trim() !== '' ? String(guardian_name).trim() : null,
+            guardian_relation && String(guardian_relation).trim() !== '' ? String(guardian_relation).trim() : null,
+            guardian_phone && String(guardian_phone).trim() !== '' ? String(guardian_phone).trim() : null,
+            guardian_cnic && String(guardian_cnic).trim() !== '' ? String(guardian_cnic).trim() : null,
+            guardian_address && String(guardian_address).trim() !== '' ? String(guardian_address).trim() : null,
+            ((!isNaN(parseFloat(monthly_fee)) && parseFloat(monthly_fee) > 0) 
+                ? parseFloat(monthly_fee) 
+                : ((!isNaN(parseFloat(family_fee)) && parseFloat(family_fee) > 0) ? parseFloat(family_fee) : 0)),
+            !isNaN(parseFloat(admission_fee)) ? parseFloat(admission_fee) : 0,
+            !isNaN(parseFloat(other_charges)) ? parseFloat(other_charges) : 0,
+            image_url || null,
+            JSON.stringify(documents),
             id
         ];
 
@@ -1499,23 +1866,58 @@ router.put('/:id', upload.fields([{ name: 'image', maxCount: 1 }, { name: 'docum
 
         // Update family fee in families table if provided
         if (family_fee !== undefined && family_fee !== null && family_fee !== '' && !isNaN(parseFloat(family_fee)) && parseFloat(family_fee) > 0 && fam_id_updated) {
+            const parsedFamFee = parseFloat(family_fee);
             await client.query(`
                 INSERT INTO families (family_id, family_fee)
                 VALUES ($1, $2)
                 ON CONFLICT (family_id) DO UPDATE SET family_fee = $2
-            `, [fam_id_updated, parseFloat(family_fee)]);
+            `, [fam_id_updated, parsedFamFee]);
+
+            // Also update any siblings in this family who have monthly_fee <= 0 or if exactly 1 active student remains
+            await client.query(`
+                UPDATE students
+                SET monthly_fee = $2
+                WHERE family_id = $1 AND (
+                    monthly_fee IS NULL 
+                    OR monthly_fee <= 0
+                    OR (SELECT COUNT(*) FROM students s2 WHERE s2.family_id = $1 AND LOWER(COALESCE(s2.status, 'Active')) = 'active') = 1
+                )
+            `, [fam_id_updated, parsedFamFee]);
+        }
+
+        // Update opening_balance in families table if provided
+        if (opening_balance !== undefined && opening_balance !== null && opening_balance !== '' && fam_id_updated) {
+            const opbVal = parseFloat(opening_balance);
+            if (!isNaN(opbVal) && opbVal >= 0) {
+                const famRes = await client.query(`SELECT opening_balance, opening_balance_paid FROM families WHERE family_id = $1`, [fam_id_updated]);
+                const currentOpb = parseFloat(famRes.rows[0]?.opening_balance || 0);
+                const currentPaid = parseFloat(famRes.rows[0]?.opening_balance_paid || 0);
+
+                if (currentPaid > 0 && currentPaid >= currentOpb && currentOpb > 0) {
+                    // Fully paid: do not edit opening_balance
+                } else {
+                    const finalOpb = Math.max(opbVal, currentPaid);
+                    await client.query(`
+                        INSERT INTO families (family_id, opening_balance, created_at)
+                        VALUES ($1, $2, NOW())
+                        ON CONFLICT (family_id) DO UPDATE SET opening_balance = $2
+                    `, [fam_id_updated, finalOpb]);
+                }
+            }
         }
 
         // Update User
         if (user_id) {
+            const fullName = `${first_name || ''} ${last_name || ''}`.trim() || 'Student';
             await client.query(
                 "UPDATE app_users SET full_name = $1, email = $2 WHERE id = $3",
-                [`${first_name} ${last_name}`, email, user_id]
+                [fullName, email && String(email).trim() !== '' ? String(email).trim() : null, user_id]
             );
         }
 
         // Create or Update Admission Fee Ledger on Edit
         const admFeeVal = parseFloat(admission_fee) || 0;
+        const validAdmDate = (admission_date && String(admission_date).trim() !== '') ? String(admission_date).trim() : new Date();
         if (admFeeVal > 0) {
             await client.query(`
                 INSERT INTO admission_fee_ledger 
@@ -1528,7 +1930,7 @@ router.put('/:id', upload.fields([{ name: 'image', maxCount: 1 }, { name: 'docum
                             WHEN admission_fee_ledger.paid_amount > 0 THEN 'partial'
                             ELSE 'unpaid'
                         END
-            `, [id, admFeeVal, admission_date || new Date()]);
+            `, [id, admFeeVal, validAdmDate]);
         } else {
             await client.query(`
                 UPDATE admission_fee_ledger
@@ -1562,7 +1964,7 @@ router.patch('/:id/status', async (req, res) => {
 
         // Update Student
         const studentRes = await client.query(
-            "UPDATE students SET status = $1 WHERE student_id = $2 RETURNING user_id",
+            "UPDATE students SET status = $1 WHERE student_id = $2 RETURNING user_id, family_id, class_id, first_name, last_name",
             [status, id]
         );
 
@@ -1571,12 +1973,103 @@ router.patch('/:id/status', async (req, res) => {
             return res.status(404).json({ error: "Student not found" });
         }
 
-        const user_id = studentRes.rows[0].user_id;
+        const { user_id, family_id, class_id } = studentRes.rows[0];
 
         // Update User if linked
         if (user_id) {
             const isActive = (status === 'Active');
             await client.query("UPDATE app_users SET is_active = $1 WHERE id = $2", [isActive, user_id]);
+        }
+
+        // Auto-shift Family Fee Slips & Arrears to the Active Family Lead
+        if (family_id) {
+            const CLASS_SENIORITY_ORDER = `
+                CASE 
+                    WHEN c.class_name ~ '^[0-9]+' THEN CAST(SUBSTRING(c.class_name FROM '^[0-9]+') AS INTEGER)
+                    WHEN c.class_name ILIKE '%Class 10%' OR c.class_name ILIKE '%10%' THEN 10
+                    WHEN c.class_name ILIKE '%Class 9%' OR c.class_name ILIKE '%9%' THEN 9
+                    WHEN c.class_name ILIKE '%Class 8%' OR c.class_name ILIKE '%8%' THEN 8
+                    WHEN c.class_name ILIKE '%Class 7%' OR c.class_name ILIKE '%7%' THEN 7
+                    WHEN c.class_name ILIKE '%Class 6%' OR c.class_name ILIKE '%6%' THEN 6
+                    WHEN c.class_name ILIKE '%Class 5%' OR c.class_name ILIKE '%5%' THEN 5
+                    WHEN c.class_name ILIKE '%Class 4%' OR c.class_name ILIKE '%4%' THEN 4
+                    WHEN c.class_name ILIKE '%Class 3%' OR c.class_name ILIKE '%3%' THEN 3
+                    WHEN c.class_name ILIKE '%Class 2%' OR c.class_name ILIKE '%2%' THEN 2
+                    WHEN c.class_name ILIKE '%Class 1%' OR c.class_name ILIKE '%1%' THEN 1
+                    WHEN c.class_name ILIKE '%Prep%' OR c.class_name ILIKE '%KG%' THEN 0
+                    WHEN c.class_name ILIKE '%Nursery%' THEN -1
+                    WHEN c.class_name ILIKE '%Reception%' OR c.class_name ILIKE '%Play%' THEN -2
+                    ELSE COALESCE(c.class_id, 0)
+                END DESC, c.class_id DESC, s.first_name ASC
+            `;
+
+            if (status.toLowerCase() !== 'active') {
+                // Student is being DEACTIVATED: find the next senior active sibling
+                const leadRes = await client.query(`
+                    SELECT s.student_id, s.class_id, s.first_name, s.last_name
+                    FROM students s
+                    LEFT JOIN classes c ON s.class_id = c.class_id
+                    WHERE s.family_id = $1 AND LOWER(COALESCE(s.status, 'Active')) = 'active' AND s.student_id != $2
+                    ORDER BY ${CLASS_SENIORITY_ORDER}
+                    LIMIT 1
+                `, [family_id, id]);
+
+                if (leadRes.rows.length > 0) {
+                    const newLead = leadRes.rows[0];
+                    // Shift all unpaid / partial slips from this deactivated student to the new active lead
+                    await client.query(`
+                        UPDATE monthly_fee_slips
+                        SET student_id = $1, class_id = $2, is_family_slip = TRUE
+                        WHERE student_id = $3 AND family_id = $4 AND status IN ('unpaid', 'partial')
+                    `, [newLead.student_id, newLead.class_id, id, family_id]);
+                }
+            } else {
+                // Student is being ACTIVATED: check if this student is now the topmost active senior
+                const topLeadRes = await client.query(`
+                    SELECT s.student_id, s.class_id
+                    FROM students s
+                    LEFT JOIN classes c ON s.class_id = c.class_id
+                    WHERE s.family_id = $1 AND LOWER(COALESCE(s.status, 'Active')) = 'active'
+                    ORDER BY ${CLASS_SENIORITY_ORDER}
+                    LIMIT 1
+                `, [family_id]);
+
+                if (topLeadRes.rows.length > 0 && topLeadRes.rows[0].student_id === parseInt(id, 10)) {
+                    // This newly activated student is the highest-class sibling -> reclaim all unpaid/partial family slips
+                    await client.query(`
+                        UPDATE monthly_fee_slips
+                        SET student_id = $1, class_id = $2, is_family_slip = TRUE
+                        WHERE family_id = $3 AND status IN ('unpaid', 'partial') AND student_id != $1
+                    `, [id, class_id, family_id]);
+                }
+            }
+
+            // ── Auto-sync / inherit Family Fee for remaining active siblings ──
+            // 1. If any sibling in the family has monthly_fee <= 0, sync to family_fee
+            await client.query(`
+                UPDATE students s
+                SET monthly_fee = f.family_fee
+                FROM families f
+                WHERE s.family_id = f.family_id
+                  AND s.family_id = $1
+                  AND (s.monthly_fee IS NULL OR s.monthly_fee <= 0)
+                  AND f.family_fee > 0
+            `, [family_id]);
+
+            // 2. If exactly 1 active student remains in the family, ensure their monthly_fee equals the family_fee
+            await client.query(`
+                UPDATE students s
+                SET monthly_fee = f.family_fee
+                FROM families f
+                WHERE s.family_id = f.family_id
+                  AND s.family_id = $1
+                  AND LOWER(COALESCE(s.status, 'Active')) = 'active'
+                  AND f.family_fee > 0
+                  AND (
+                      SELECT COUNT(*) FROM students sub 
+                      WHERE sub.family_id = $1 AND LOWER(COALESCE(sub.status, 'Active')) = 'active'
+                  ) = 1
+            `, [family_id]);
         }
 
         await client.query('COMMIT');
@@ -1865,14 +2358,17 @@ router.post('/opb/families/:family_id/payment', async (req, res) => {
             return res.status(400).json({ error: 'Opening balance is already fully paid' });
         }
 
-        // Record payment in ledger
+        // Record payment in ledger with active academic_year_id
+        const activeYearRes = await client.query("SELECT id FROM academic_years WHERE is_active = TRUE ORDER BY id ASC LIMIT 1");
+        const activeYearId = activeYearRes.rows[0]?.id || null;
+
         const payment = await client.query(`
             INSERT INTO family_opb_payments
-                (family_id, amount, payment_date, payment_method, received_by, reference_no, notes)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+                (family_id, amount, payment_date, payment_method, received_by, reference_no, notes, academic_year_id)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             RETURNING *
         `, [family_id, payAmt, payment_date || new Date().toISOString().split('T')[0],
-            payment_method || 'cash', received_by || null, reference_no || null, notes || null]);
+            payment_method || 'cash', received_by || null, reference_no || null, notes || null, activeYearId]);
 
         // Update families.opening_balance_paid
         await client.query(`

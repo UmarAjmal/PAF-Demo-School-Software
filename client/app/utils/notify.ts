@@ -36,8 +36,7 @@ export const playNotifySound = (type: 'success' | 'error' | 'warning' = 'success
 export const notify = {
     success: (msg: string) => { toast.success(msg); playNotifySound('success'); },
     error: (msg: string) => { toast.error(msg); playNotifySound('error'); },
-    warning: (msg: string) => { toast.warning(msg); playNotifySound('warning'); },
-    info: (msg: string) => { toast.info(msg); playNotifySound('warning'); }
+    warning: (msg: string) => { toast.warning(msg); playNotifySound('warning'); }
 };
 
 

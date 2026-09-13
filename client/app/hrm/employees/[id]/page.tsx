@@ -365,16 +365,17 @@ export default function EmployeeProfile() {
                                         <div className="row g-2 mb-4">
                                             {[
                                                 { l: 'Present', v: attStats.present, c: '#198754' },
+                                                { l: 'Late Entries', v: attStats.late_in ?? attStats.late, c: '#fd7e14' },
+                                                { l: 'Early Exits', v: attStats.early_out ?? 0, c: '#f97316' },
                                                 { l: 'Absent', v: attStats.absent, c: '#dc3545' },
-                                                { l: 'Late', v: attStats.late, c: '#fd7e14' },
                                                 { l: 'Leave', v: attStats.leave, c: '#0d6efd' },
-                                                { l: 'Total', v: attStats.total, c: '#6c757d' },
+                                                { l: 'Total Days', v: attStats.total, c: '#6c757d' },
                                             ].map(s => (
-                                                <div className="col" key={s.l}>
-                                                    <div className="card border-0 shadow-sm text-center py-2 rounded-3"
-                                                        style={{ borderTop: `3px solid ${s.c}` }}>
-                                                        <div style={{ fontSize: '1.4rem', fontWeight: 700, color: s.c }}>{s.v ?? 0}</div>
-                                                        <div style={{ fontSize: '0.75rem', color: '#6c757d' }}>{s.l}</div>
+                                                <div className="col-6 col-md" key={s.l}>
+                                                    <div className="card border-0 shadow-sm text-center py-2.5 rounded-3 bg-white"
+                                                        style={{ borderTop: `3.5px solid ${s.c}` }}>
+                                                        <div style={{ fontSize: '1.35rem', fontWeight: 700, color: s.c }}>{s.v ?? 0}</div>
+                                                        <div style={{ fontSize: '0.72rem', color: '#6c757d', textTransform: 'uppercase', fontWeight: 600 }}>{s.l}</div>
                                                     </div>
                                                 </div>
                                             ))}
@@ -385,42 +386,77 @@ export default function EmployeeProfile() {
                                             <div className="mb-3">
                                                 <div className="progress" style={{ height: 8, borderRadius: 8 }}>
                                                     <div className="progress-bar bg-success"
-                                                        style={{ width: `${Math.round(((attStats.present + attStats.late) / attStats.total) * 100)}%`, borderRadius: 8 }} />
+                                                        style={{ width: `${Math.round(((attStats.present + (attStats.late_in || 0)) / attStats.total) * 100)}%`, borderRadius: 8 }} />
                                                 </div>
                                                 <div className="small text-muted mt-1 text-end">
-                                                    Attendance: {Math.round(((attStats.present + attStats.late) / attStats.total) * 100)}%
+                                                    Punctuality Rate: {Math.round(((attStats.present + (attStats.late_in || 0)) / attStats.total) * 100)}%
                                                 </div>
                                             </div>
                                         )}
 
                                         {attRecords.length > 0 ? (
-                                            <div className="bg-white rounded-4 shadow-sm">
+                                            <div className="bg-white rounded-4 shadow-sm overflow-hidden">
                                                 <div className="table-responsive">
                                                     <table className="table table-hover table-sm align-middle mb-0">
                                                         <thead style={{ background: 'var(--primary-dark)', color: '#fff' }}>
                                                             <tr>
-                                                                <th className="ps-3">#</th><th>Date</th><th>Day</th><th>Status</th>
-                                                                <th>Check In</th><th>Check Out</th><th>Remarks</th>
+                                                                <th className="ps-3 py-2.5">#</th>
+                                                                <th className="py-2.5">Date</th>
+                                                                <th className="py-2.5">Day</th>
+                                                                <th className="py-2.5">Status</th>
+                                                                <th className="py-2.5">IN Time (Arrival)</th>
+                                                                <th className="py-2.5">OUT Time (Departure)</th>
+                                                                <th className="py-2.5">Verification</th>
+                                                                <th className="py-2.5 pe-3">Remarks</th>
                                                             </tr>
                                                         </thead>
                                                         <tbody>
                                                             {attRecords.map((r: any, i: number) => {
-                                                                const d = new Date(r.attendance_date);
+                                                                const d = new Date(r.attendance_date + 'T00:00:00');
                                                                 const clr: Record<string, string> = { Present: '#198754', Absent: '#dc3545', Late: '#fd7e14', Leave: '#0d6efd' };
                                                                 return (
-                                                                    <tr key={r.attendance_id}>
+                                                                    <tr key={r.attendance_id || i}>
                                                                         <td className="ps-3 text-muted small">{i + 1}</td>
-                                                                        <td className="fw-medium">{d.toLocaleDateString('en-PK', { day: '2-digit', month: 'short', year: 'numeric' })}</td>
+                                                                        <td className="fw-medium small">{d.toLocaleDateString('en-PK', { day: '2-digit', month: 'short', year: 'numeric' })}</td>
                                                                         <td className="text-muted small">{d.toLocaleDateString('en-PK', { weekday: 'short' })}</td>
                                                                         <td>
-                                                                            <span className="badge rounded-pill px-3"
-                                                                                style={{ background: (clr[r.status] || '#6c757d') + '20', color: clr[r.status] || '#6c757d', border: `1px solid ${clr[r.status] || '#6c757d'}`, fontWeight: 700 }}>
+                                                                            <span className="badge rounded-pill px-2.5 py-1"
+                                                                                style={{ background: (clr[r.status] || '#6c757d') + '20', color: clr[r.status] || '#6c757d', border: `1px solid ${clr[r.status] || '#6c757d'}44`, fontWeight: 700, fontSize: '0.72rem' }}>
                                                                                 {r.status}
                                                                             </span>
                                                                         </td>
-                                                                        <td className="small">{r.check_in_time ? r.check_in_time.substring(0, 5) : '—'}</td>
-                                                                        <td className="small">{r.check_out_time ? r.check_out_time.substring(0, 5) : '—'}</td>
-                                                                        <td className="text-muted small">{r.remarks || '—'}</td>
+                                                                        <td className="small">
+                                                                            {r.check_in_time ? (
+                                                                                <span className="fw-bold font-monospace">
+                                                                                    <i className="bi bi-box-arrow-in-right text-success me-1" />
+                                                                                    {r.check_in_time.substring(0, 5)}
+                                                                                    {r.is_in_late && (
+                                                                                        <span className="badge bg-warning-subtle text-warning-emphasis border border-warning ms-1" style={{ fontSize: '0.62rem' }}>Late</span>
+                                                                                    )}
+                                                                                </span>
+                                                                            ) : '—'}
+                                                                        </td>
+                                                                        <td className="small">
+                                                                            {r.check_out_time ? (
+                                                                                <span className="fw-bold font-monospace">
+                                                                                    <i className="bi bi-box-arrow-right text-primary me-1" />
+                                                                                    {r.check_out_time.substring(0, 5)}
+                                                                                    {r.is_out_early && (
+                                                                                        <span className="badge bg-warning-subtle text-warning-emphasis border border-warning ms-1" style={{ fontSize: '0.62rem' }}>Early</span>
+                                                                                    )}
+                                                                                </span>
+                                                                            ) : '—'}
+                                                                        </td>
+                                                                        <td>
+                                                                            {r.in_verified || r.out_verified ? (
+                                                                                <span className="badge bg-success-subtle text-success border border-success-subtle" style={{ fontSize: '0.68rem' }}>
+                                                                                    <i className="bi bi-shield-check me-0.5" />Biometric
+                                                                                </span>
+                                                                            ) : (
+                                                                                <span className="text-muted small" style={{ fontSize: '0.72rem' }}>Standard</span>
+                                                                            )}
+                                                                        </td>
+                                                                        <td className="text-muted small pe-3">{r.remarks || '—'}</td>
                                                                     </tr>
                                                                 );
                                                             })}
