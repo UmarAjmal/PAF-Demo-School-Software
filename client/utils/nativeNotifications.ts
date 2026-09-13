@@ -1,3 +1,4 @@
+import { Capacitor } from '@capacitor/core';
 import { LocalNotifications } from '@capacitor/local-notifications';
 
 /**
@@ -11,14 +12,16 @@ export async function requestMobileNotificationPermissions() {
                 await Notification.requestPermission();
             }
 
-            // 2. Capacitor Android Native permission
-            try {
-                const perm = await LocalNotifications.checkPermissions();
-                if (perm.display !== 'granted') {
-                    await LocalNotifications.requestPermissions();
+            // 2. Capacitor Android / iOS Native permission
+            if (Capacitor.isNativePlatform()) {
+                try {
+                    const perm = await LocalNotifications.checkPermissions();
+                    if (perm.display !== 'granted') {
+                        await LocalNotifications.requestPermissions();
+                    }
+                } catch (capErr) {
+                    // Non-Capacitor / pure browser fallback
                 }
-            } catch (capErr) {
-                // Non-Capacitor / pure browser fallback
             }
         }
     } catch (err) {
@@ -36,24 +39,26 @@ export async function triggerNativeDeviceNotification(id: number, title: string,
         let scheduledCapacitor = false;
 
         // A. Capacitor Android Native Device Notification
-        try {
-            await LocalNotifications.schedule({
-                notifications: [
-                    {
-                        title: title,
-                        body: message,
-                        id: Math.floor(Math.abs(id)) || Math.floor(Math.random() * 100000),
-                        schedule: { at: new Date(Date.now() + 500) },
-                        sound: undefined,
-                        attachments: undefined,
-                        actionTypeId: '',
-                        extra: { link: link || '/dashboard' }
-                    }
-                ]
-            });
-            scheduledCapacitor = true;
-        } catch (capErr) {
-            // Non-Capacitor environment
+        if (Capacitor.isNativePlatform()) {
+            try {
+                await LocalNotifications.schedule({
+                    notifications: [
+                        {
+                            title: title,
+                            body: message,
+                            id: Math.floor(Math.abs(id)) || Math.floor(Math.random() * 100000),
+                            schedule: { at: new Date(Date.now() + 500) },
+                            sound: undefined,
+                            attachments: undefined,
+                            actionTypeId: '',
+                            extra: { link: link || '/dashboard' }
+                        }
+                    ]
+                });
+                scheduledCapacitor = true;
+            } catch (capErr) {
+                // Non-Capacitor environment
+            }
         }
 
         // B. Fallback to Browser / Web Notification API

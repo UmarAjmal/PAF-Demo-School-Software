@@ -22,6 +22,7 @@ export interface AuthUser {
     permissions: Permission[];
     employee_id?: number;
     incharge_class?: { class_id: number, section_id: number } | null;
+    dashboard_access?: string;
 }
 
 interface AuthContextType {
