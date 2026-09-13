@@ -10,7 +10,7 @@ type Teacher = {
     last_name: string;
     designation: string;
     department_name: string;
-    assigned_subjects: { subject_id: number; subject_name: string; assignment_id: number }[];
+    assigned_subjects: { subject_id: number; subject_name: string; term_name?: string; assignment_id: number }[];
     assigned_classes: { class_id: number; class_name: string; section_id: number; section_name: string; is_class_teacher: boolean; assignment_id: number }[];
     status: string;
     phone: string;
@@ -25,14 +25,13 @@ type Subject = {
     section_name: string;
     class_name: string;
     subject_code: string;
+    term_id?: number | null;
+    term_name?: string;
 };
 
 type Class = { class_id: number; class_name: string; };
 type Section = { section_id: number; section_name: string; class_id: number; };
-
-// --- Styling Constants ---
-// Using CSS variables defined in global.css
-// --primary-dark (#233D4D), --primary-teal (#215E61), --accent-orange (#FE7F2D)
+type Term = { id: number; term_name: string; academic_year_id?: number; year_name?: string; };
 
 export default function TeacherAssign() {
     // --- Data State ---
@@ -40,6 +39,7 @@ export default function TeacherAssign() {
     const [allSubjects, setAllSubjects] = useState<Subject[]>([]);
     const [classes, setClasses] = useState<Class[]>([]);
     const [sections, setSections] = useState<Section[]>([]);
+    const [terms, setTerms] = useState<Term[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
@@ -47,17 +47,16 @@ export default function TeacherAssign() {
     const [selectedTeacher, setSelectedTeacher] = useState<Teacher | null>(null);
     const [showAssignModal, setShowAssignModal] = useState(false);
 
-    // Navigation State (Which Class/Section is currently being viewed)
+    // Step-by-Step Navigation State: [Term -> Class -> Section -> Subject]
+    const [activeTermId, setActiveTermId] = useState<number | 'ALL' | null>('ALL');
     const [activeClassId, setActiveClassId] = useState<number | null>(null);
     const [activeSectionId, setActiveSectionId] = useState<number | null>(null);
 
     // --- Edit State (The "Buffer") ---
-    // These store the CURRENT configuration by the user in the modal
     const [selectedSubjectIds, setSelectedSubjectIds] = useState<Set<number>>(new Set());
     const [classTeacherSections, setClassTeacherSections] = useState<Set<number>>(new Set());
 
-    // --- Initial State Mappers (For Diffing on Save) ---
-    // specific maps to look up assignment_ids for deletion
+    // --- Initial State Mappers ---
     const [initialSubjectMap, setInitialSubjectMap] = useState<Record<number, number>>({}); // subject_id -> assignment_id
     const [initialClassMap, setInitialClassMap] = useState<Record<string, number>>({}); // "class_id-section_id" -> assignment_id
     const { hasPermission } = useAuth();
@@ -71,16 +70,13 @@ export default function TeacherAssign() {
         setError(null);
         const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://demo-school-soxa.onrender.com";
 
-
         try {
             console.log("Fetching from:", API_URL);
 
-            // Create a timeout promise to prevent infinite loading
             const timeoutPromise = new Promise((_, reject) =>
                 setTimeout(() => reject(new Error('Request timed out after 10 seconds. Server might be down.')), 10000)
             );
 
-            // Use 'cache: no-store' to ensure we get fresh data
             const fetchConfig = { cache: 'no-store' } as RequestInit;
 
             const fetchPromise = Promise.all([
@@ -90,7 +86,6 @@ export default function TeacherAssign() {
                 fetch(`${API_URL}/academic/sections`, fetchConfig).then(res => { if (!res.ok) throw new Error(`Sections: ${res.status}`); return res.json(); })
             ]);
 
-            // Race against timeout
             const results = await Promise.race([fetchPromise, timeoutPromise]) as any[];
             const [teachersData, subjectsData, classesData, sectionsData] = results;
 
@@ -100,6 +95,19 @@ export default function TeacherAssign() {
             if (Array.isArray(subjectsData)) setAllSubjects(subjectsData);
             if (Array.isArray(classesData)) setClasses(classesData);
             if (Array.isArray(sectionsData)) setSections(sectionsData);
+
+            // Fetch Academic Terms
+            try {
+                let termRes = await fetch(`${API_URL}/academic/subjects/terms`, fetchConfig);
+                if (!termRes.ok) termRes = await fetch(`${API_URL}/academic/terms/active`, fetchConfig);
+                if (!termRes.ok) termRes = await fetch(`${API_URL}/academic/terms-all`, fetchConfig);
+                if (termRes.ok) {
+                    const termsData = await termRes.json();
+                    if (Array.isArray(termsData)) setTerms(termsData);
+                }
+            } catch (e) {
+                console.error("Terms fetch error:", e);
+            }
 
         } catch (err: any) {
             console.error("Fetch Error:", err);
@@ -127,20 +135,19 @@ export default function TeacherAssign() {
 
         // 2. Load Class Teacher roles
         const tCTSections = new Set<number>();
-        const tClassMap: Record<string, number> = {}; // key: "class_id-section_id"
+        const tClassMap: Record<string, number> = {};
 
         teacher.assigned_classes?.forEach(c => {
             if (c.is_class_teacher) {
                 tCTSections.add(c.section_id);
             }
-            // Store assignment ID for ALL class links to handle deletions if needed
-            // (Though currently we mainly auto-manage class links via subjects)
             tClassMap[`${c.class_id}-${c.section_id}`] = c.assignment_id;
         });
         setClassTeacherSections(tCTSections);
         setInitialClassMap(tClassMap);
 
-        // 3. Reset View Navigation
+        // 3. Reset View Navigation: Step 1 (Term) -> Step 2 (Class) -> Step 3 (Section) -> Step 4 (Subject)
+        setActiveTermId('ALL');
         setActiveClassId(null);
         setActiveSectionId(null);
         setShowAssignModal(true);
@@ -171,7 +178,6 @@ export default function TeacherAssign() {
             const apiCalls: Promise<Response>[] = [];
 
             // 1. Handle Subjects (Add/Remove)
-            // Iterate over Union of (Initial U Selected)
             const allInvolvedSubjects = new Set([...Array.from(selectedSubjectIds), ...Object.keys(initialSubjectMap).map(Number)]);
 
             for (const subId of Array.from(allInvolvedSubjects)) {
@@ -179,7 +185,6 @@ export default function TeacherAssign() {
                 const isSelected = selectedSubjectIds.has(subId);
 
                 if (isSelected && !wasSelected) {
-                    // ADD
                     apiCalls.push(
                         fetch(`${process.env.NEXT_PUBLIC_API_URL || "https://demo-school-soxa.onrender.com"}/academic/teachers/${employeeId}/subjects`, {
                             method: 'POST',
@@ -188,7 +193,6 @@ export default function TeacherAssign() {
                         })
                     );
                 } else if (!isSelected && wasSelected) {
-                    // REMOVE
                     const assignId = initialSubjectMap[subId];
                     if (assignId) {
                         apiCalls.push(
@@ -201,22 +205,18 @@ export default function TeacherAssign() {
             }
 
             // 2. Handle Class Teacher Status & Implicit Class Assignments
-            const activeSectionsMap = new Map<number, boolean>(); // section_id -> is_active
+            const activeSectionsMap = new Map<number, boolean>();
 
-            // Mark active from subjects
             selectedSubjectIds.forEach(subId => {
                 const sub = allSubjects.find(s => s.subject_id === subId);
                 if (sub) activeSectionsMap.set(sub.section_id, true);
             });
-            // Mark active from Class Teacher
             classTeacherSections.forEach(secId => activeSectionsMap.set(secId, true));
 
-            // -- Process Upserts (Active Sections) --
             for (const [secId, _] of Array.from(activeSectionsMap.entries())) {
                 const sec = sections.find(s => s.section_id === secId);
                 if (!sec) continue;
 
-                // POST (Upsert)
                 apiCalls.push(
                     fetch(`${process.env.NEXT_PUBLIC_API_URL || "https://demo-school-soxa.onrender.com"}/academic/teachers/${employeeId}/classes`, {
                         method: 'POST',
@@ -230,13 +230,10 @@ export default function TeacherAssign() {
                 );
             }
 
-            // -- Process Deletes (Inactive Sections that were present) --
-            // Loop through initial assignments
             if (selectedTeacher.assigned_classes) {
                 for (const cls of selectedTeacher.assigned_classes) {
                     const secId = cls.section_id;
                     if (!activeSectionsMap.has(secId)) {
-                        // Section is no longer active (no subjects, not CT) -> Remove it
                         apiCalls.push(
                             fetch(`${process.env.NEXT_PUBLIC_API_URL || "https://demo-school-soxa.onrender.com"}/academic/teachers/${employeeId}/classes/${cls.assignment_id}`, {
                                 method: 'DELETE'
@@ -267,28 +264,42 @@ export default function TeacherAssign() {
 
     // --- Derived UI Helpers ---
 
-    // Subjects for current view
+    // Filter Subjects for current Step selection (Term -> Class -> Section -> Subject)
     const visibleSubjects = useMemo(() => {
         if (!activeSectionId) return [];
-        return allSubjects.filter(s => s.section_id === activeSectionId);
-    }, [activeSectionId, allSubjects]);
+        return allSubjects.filter(s => {
+            if (s.section_id !== activeSectionId) return false;
+            if (!activeTermId || activeTermId === 'ALL') return true;
+            return s.term_id === activeTermId;
+        });
+    }, [activeTermId, activeSectionId, allSubjects]);
 
-    // Derived: Counts for Badges
+    // Badge Count Helpers
+    const getSubjectCountForTerm = (termId: number | 'ALL') => {
+        const subIds = allSubjects
+            .filter(s => termId === 'ALL' || s.term_id === termId)
+            .map(s => s.subject_id);
+        const count = subIds.filter(id => selectedSubjectIds.has(id)).length;
+        return count > 0 ? count : null;
+    };
+
     const getSubjectCountForClass = (clsId: number) => {
-        // Count selected subjects that belong to this class
-        const subIdsInClass = allSubjects.filter(s => s.class_id === clsId).map(s => s.subject_id);
+        const subIdsInClass = allSubjects
+            .filter(s => s.class_id === clsId && (!activeTermId || activeTermId === 'ALL' || s.term_id === activeTermId))
+            .map(s => s.subject_id);
         const count = subIdsInClass.filter(id => selectedSubjectIds.has(id)).length;
         return count > 0 ? count : null;
     };
 
     const getSubjectCountForSection = (secId: number) => {
-        const subIdsInSec = allSubjects.filter(s => s.section_id === secId).map(s => s.subject_id);
+        const subIdsInSec = allSubjects
+            .filter(s => s.section_id === secId && (!activeTermId || activeTermId === 'ALL' || s.term_id === activeTermId))
+            .map(s => s.subject_id);
         const count = subIdsInSec.filter(id => selectedSubjectIds.has(id)).length;
         return count > 0 ? count : null;
     };
 
     const isClassTeacher = (secId: number) => classTeacherSections.has(secId);
-
 
     return (
         <>
@@ -297,7 +308,7 @@ export default function TeacherAssign() {
                     <h2 className="mb-0 fw-bold" style={{ color: 'var(--primary-dark)' }}>
                         <i className="bi bi-person-video3 me-2"></i>Teacher Assignments
                     </h2>
-                    <div className="text-muted small">Manage subjects and class responsibilities</div>
+                    <div className="text-muted small">Manage term-wise subjects and class responsibilities</div>
                 </div>
 
                 {/* List Grid */}
@@ -307,7 +318,7 @@ export default function TeacherAssign() {
                             <div className="spinner-border text-primary" style={{ width: '3rem', height: '3rem' }} role="status">
                                 <span className="visually-hidden">Loading...</span>
                             </div>
-                            <div className="mt-3 text-muted">Connecting to Server (Falcon School Systemschool.onrender.com)...</div>
+                            <div className="mt-3 text-muted">Loading Teachers Data...</div>
                         </div>
                     ) : error ? (
                         <div className="col-12 text-center py-5">
@@ -347,12 +358,12 @@ export default function TeacherAssign() {
                                         </div>
 
                                         <div className="mb-3">
-                                            <small className="text-uppercase fw-bold text-muted" style={{ fontSize: '0.75rem' }}>Assigned Subjects</small>
-                                            <div className="d-flex flex-wrap gap-2 mt-1">
+                                            <small className="text-uppercase fw-bold text-muted d-block mb-1" style={{ fontSize: '0.75rem' }}>Assigned Subjects</small>
+                                            <div className="d-flex flex-wrap gap-1 mt-1">
                                                 {teacher.assigned_subjects?.length > 0 ? (
                                                     teacher.assigned_subjects.map((s, i) => (
                                                         <span key={i} className="badge bg-light text-dark border">
-                                                            {s.subject_name}
+                                                            {s.subject_name} {s.term_name ? <small className="text-primary fw-normal">({s.term_name})</small> : ''}
                                                         </span>
                                                     ))
                                                 ) : <span className="text-muted small fst-italic">No subjects assigned</span>}
@@ -376,10 +387,10 @@ export default function TeacherAssign() {
                 </div>
             </div>
 
-            {/* --- ASSIGN MODAL --- */}
+            {/* --- ASSIGN MODAL (Step by Step: Term -> Class -> Section -> Subject) --- */}
             {showAssignModal && selectedTeacher && (
                 <div className="modal show d-block" style={{ backgroundColor: 'rgba(35, 61, 77, 0.7)', zIndex: 10000 }}>
-                    <div className="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
+                    <div className="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable" style={{ maxWidth: '95%' }}>
                         <div className="modal-content border-0 shadow-lg" style={{ borderRadius: '1rem', overflow: 'hidden' }}>
                             {/* Header */}
                             <div className="modal-header text-white px-4 py-3" style={{ backgroundColor: 'var(--primary-dark)' }}>
@@ -387,28 +398,70 @@ export default function TeacherAssign() {
                                     <h5 className="modal-title fw-bold">
                                         Assignments: {selectedTeacher.first_name} {selectedTeacher.last_name}
                                     </h5>
-                                    <div className="small opacity-75">Select classes and subjects below. Changes are saved when you click Confirm.</div>
+                                    <div className="small opacity-75">
+                                        Step-by-step assignment: <strong>Term → Class → Section → Assign Subjects</strong>
+                                    </div>
                                 </div>
                                 <button type="button" className="btn-close btn-close-white" onClick={() => setShowAssignModal(false)}></button>
                             </div>
 
-                            {/* Body (3 Columns) */}
+                            {/* Body (4 Columns: Term -> Class -> Section -> Subject) */}
                             <div className="modal-body p-0" style={{ backgroundColor: '#f8f9fa' }}>
-                                <div className="row g-0 h-100" style={{ minHeight: '500px' }}>
+                                <div className="row g-0 h-100" style={{ minHeight: '520px' }}>
 
-                                    {/* COL 1: CLASSES */}
-                                    <div className="col-md-3 border-end bg-white">
-                                        <div className="p-3 bg-light border-bottom fw-bold text-muted text-uppercase small">
-                                            <i className="bi bi-building me-2"></i>1. Select Class
+                                    {/* COL 1: SELECT TERM */}
+                                    <div className="col-md-3 col-lg-2 border-end bg-white">
+                                        <div className="p-3 bg-dark text-white border-bottom fw-bold text-uppercase fs-8">
+                                            <i className="bi bi-calendar2-range me-2 text-warning"></i>1. Select Term
+                                        </div>
+                                        <div className="list-group list-group-flush">
+                                            {/* All Terms Button */}
+                                            <button
+                                                className={`list-group-item list-group-item-action py-3 px-3 d-flex justify-content-between align-items-center ${activeTermId === 'ALL' ? 'active-class-item' : ''}`}
+                                                style={activeTermId === 'ALL' ? { backgroundColor: 'var(--primary-dark)', color: 'white' } : {}}
+                                                onClick={() => { setActiveTermId('ALL'); setActiveClassId(null); setActiveSectionId(null); }}
+                                            >
+                                                <span className="fw-semibold">All Terms</span>
+                                                {getSubjectCountForTerm('ALL') && (
+                                                    <span className="badge bg-warning text-dark rounded-pill">{getSubjectCountForTerm('ALL')}</span>
+                                                )}
+                                            </button>
+
+                                            {terms.map(t => {
+                                                const count = getSubjectCountForTerm(t.id);
+                                                const isSelected = activeTermId === t.id;
+                                                return (
+                                                    <button
+                                                        key={t.id}
+                                                        className={`list-group-item list-group-item-action py-3 px-3 d-flex justify-content-between align-items-center ${isSelected ? 'active-class-item' : ''}`}
+                                                        style={isSelected ? { backgroundColor: 'var(--primary-teal)', color: 'white' } : {}}
+                                                        onClick={() => { setActiveTermId(t.id); setActiveClassId(null); setActiveSectionId(null); }}
+                                                    >
+                                                        <div className="d-flex flex-column">
+                                                            <span className="fw-semibold fs-7">{t.term_name}</span>
+                                                            {t.year_name && <small className={`fs-8 ${isSelected ? 'text-white-50' : 'text-muted'}`}>{t.year_name}</small>}
+                                                        </div>
+                                                        {count && <span className="badge bg-warning text-dark rounded-pill">{count}</span>}
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+
+                                    {/* COL 2: SELECT CLASS */}
+                                    <div className="col-md-3 col-lg-3 border-end bg-white">
+                                        <div className="p-3 bg-light border-bottom fw-bold text-muted text-uppercase fs-8">
+                                            <i className="bi bi-mortarboard me-2"></i>2. Select Class
                                         </div>
                                         <div className="list-group list-group-flush">
                                             {classes.map(cls => {
                                                 const count = getSubjectCountForClass(cls.class_id);
+                                                const isSelected = activeClassId === cls.class_id;
                                                 return (
                                                     <button
                                                         key={cls.class_id}
-                                                        className={`list-group-item list-group-item-action py-3 px-3 border-bottom-0 d-flex justify-content-between align-items-center ${activeClassId === cls.class_id ? 'active-class-item' : ''}`}
-                                                        style={activeClassId === cls.class_id ? { backgroundColor: 'var(--primary-teal)', color: 'white' } : {}}
+                                                        className={`list-group-item list-group-item-action py-3 px-3 border-bottom-0 d-flex justify-content-between align-items-center ${isSelected ? 'active-class-item' : ''}`}
+                                                        style={isSelected ? { backgroundColor: 'var(--primary-teal)', color: 'white' } : {}}
                                                         onClick={() => { setActiveClassId(cls.class_id); setActiveSectionId(null); }}
                                                     >
                                                         <span className="fw-semibold">{cls.class_name}</span>
@@ -419,10 +472,10 @@ export default function TeacherAssign() {
                                         </div>
                                     </div>
 
-                                    {/* COL 2: SECTIONS */}
-                                    <div className="col-md-3 border-end bg-light">
-                                        <div className="p-3 bg-light border-bottom fw-bold text-muted text-uppercase small">
-                                            <i className="bi bi-grid-3x3-gap me-2"></i>2. Select Section
+                                    {/* COL 3: SELECT SECTION */}
+                                    <div className="col-md-3 col-lg-3 border-end bg-light">
+                                        <div className="p-3 bg-light border-bottom fw-bold text-muted text-uppercase fs-8">
+                                            <i className="bi bi-grid-3x3-gap me-2"></i>3. Select Section
                                         </div>
                                         <div className="list-group list-group-flush">
                                             {!activeClassId ? (
@@ -431,11 +484,12 @@ export default function TeacherAssign() {
                                                 sections.filter(s => s.class_id === activeClassId).map(sec => {
                                                     const count = getSubjectCountForSection(sec.section_id);
                                                     const isCT = isClassTeacher(sec.section_id);
+                                                    const isSelected = activeSectionId === sec.section_id;
                                                     return (
                                                         <button
                                                             key={sec.section_id}
-                                                            className={`list-group-item list-group-item-action py-3 px-3 d-flex justify-content-between align-items-center ${activeSectionId === sec.section_id ? 'bg-white border-start border-4' : 'bg-transparent text-muted'}`}
-                                                            style={activeSectionId === sec.section_id ? { borderLeftColor: 'var(--primary-teal)', color: 'var(--primary-dark)' } : {}}
+                                                            className={`list-group-item list-group-item-action py-3 px-3 d-flex justify-content-between align-items-center ${isSelected ? 'bg-white border-start border-4' : 'bg-transparent text-muted'}`}
+                                                            style={isSelected ? { borderLeftColor: 'var(--primary-teal)', color: 'var(--primary-dark)' } : {}}
                                                             onClick={() => setActiveSectionId(sec.section_id)}
                                                         >
                                                             <div className="d-flex align-items-center">
@@ -450,11 +504,11 @@ export default function TeacherAssign() {
                                         </div>
                                     </div>
 
-                                    {/* COL 3: SUBJECTS */}
-                                    <div className="col-md-6 bg-white">
+                                    {/* COL 4: ASSIGN SUBJECTS */}
+                                    <div className="col-md-3 col-lg-4 bg-white">
                                         <div className="p-3 border-bottom d-flex justify-content-between align-items-center bg-white sticky-top">
-                                            <div className="fw-bold text-muted text-uppercase small">
-                                                <i className="bi bi-book me-2"></i>3. Assign Subjects
+                                            <div className="fw-bold text-muted text-uppercase fs-8">
+                                                <i className="bi bi-book me-2"></i>4. Assign Subjects
                                             </div>
                                             {activeSectionId && (
                                                 <div className="form-check form-switch cursor-pointer user-select-none">
@@ -479,7 +533,10 @@ export default function TeacherAssign() {
                                                     Select a section to view subjects
                                                 </div>
                                             ) : visibleSubjects.length === 0 ? (
-                                                <div className="text-center py-5 text-muted">No subjects found in this section</div>
+                                                <div className="text-center py-5 text-muted">
+                                                    No subjects found for this selection
+                                                    {activeTermId && activeTermId !== 'ALL' ? ' in selected term' : ''}.
+                                                </div>
                                             ) : (
                                                 <div className="row g-3">
                                                     {visibleSubjects.map(sub => {
@@ -487,22 +544,29 @@ export default function TeacherAssign() {
                                                         return (
                                                             <div className="col-12" key={sub.subject_id}>
                                                                 <div
-                                                                    className={`p-3 rounded-3 border d-flex align-items-center cursor-pointer transition-all ${isSelected ? 'border-primary bg-primary bg-opacity-10' : 'border-light bg-light'}`}
+                                                                    className={`p-3 rounded-3 border d-flex align-items-center justify-content-between cursor-pointer transition-all ${isSelected ? 'border-primary bg-primary bg-opacity-10' : 'border-light bg-light'}`}
                                                                     onClick={() => toggleSubject(sub.subject_id)}
                                                                 >
-                                                                    <div className={`form-check me-3 ${isSelected ? 'scale-110' : ''}`}>
-                                                                        <input
-                                                                            type="checkbox"
-                                                                            className="form-check-input"
-                                                                            checked={isSelected}
-                                                                            onChange={() => { }} // Handled by div click
-                                                                            style={{ cursor: 'pointer' }}
-                                                                        />
+                                                                    <div className="d-flex align-items-center">
+                                                                        <div className={`form-check me-3 ${isSelected ? 'scale-110' : ''}`}>
+                                                                            <input
+                                                                                type="checkbox"
+                                                                                className="form-check-input"
+                                                                                checked={isSelected}
+                                                                                onChange={() => { }}
+                                                                                style={{ cursor: 'pointer' }}
+                                                                            />
+                                                                        </div>
+                                                                        <div>
+                                                                            <div className={`fw-bold ${isSelected ? 'text-primary' : 'text-dark'}`}>{sub.subject_name}</div>
+                                                                            <small className="text-muted">Code: {sub.subject_code || 'N/A'}</small>
+                                                                        </div>
                                                                     </div>
-                                                                    <div>
-                                                                        <div className={`fw-bold ${isSelected ? 'text-primary' : 'text-dark'}`}>{sub.subject_name}</div>
-                                                                        <small className="text-muted">Code: {sub.subject_code || 'N/A'}</small>
-                                                                    </div>
+                                                                    {sub.term_name && (
+                                                                        <span className="badge bg-info text-dark fs-8">
+                                                                            {sub.term_name}
+                                                                        </span>
+                                                                    )}
                                                                 </div>
                                                             </div>
                                                         );
@@ -538,5 +602,3 @@ export default function TeacherAssign() {
         </>
     );
 }
-
-

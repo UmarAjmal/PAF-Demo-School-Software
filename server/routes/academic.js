@@ -226,11 +226,48 @@ router.put('/years/activate/:id', async (req, res) => {
     }
 });
 
+// Get Terms for Active Academic Year (or All Terms)
+const getActiveTermsHandler = async (req, res) => {
+    try {
+        const query = `
+            SELECT t.id, t.term_name, t.academic_year_id, y.year_name, y.is_active
+            FROM academic_terms t
+            JOIN academic_years y ON t.academic_year_id = y.id
+            WHERE y.is_active = true OR y.status = 'active'
+            ORDER BY t.id ASC
+        `;
+        let result = await pool.query(query);
+        if (result.rows.length === 0) {
+            result = await pool.query(`
+                SELECT t.id, t.term_name, t.academic_year_id, y.year_name, y.is_active
+                FROM academic_terms t
+                LEFT JOIN academic_years y ON t.academic_year_id = y.id
+                ORDER BY t.id ASC
+            `);
+        }
+        res.json(result.rows);
+    } catch (err) {
+        console.error(err.message);
+        res.status(500).json({ error: "Server Error" });
+    }
+};
+
+router.get('/terms/active', getActiveTermsHandler);
+router.get('/terms-all', getActiveTermsHandler);
+router.get('/active-terms', getActiveTermsHandler);
+
 // Get Terms for a Year
 router.get('/terms/:yearId', async (req, res) => {
     try {
         const { yearId } = req.params;
-        const result = await pool.query("SELECT * FROM academic_terms WHERE academic_year_id = $1 ORDER BY id ASC", [yearId]);
+        if (yearId === 'active' || yearId === 'all') {
+            return getActiveTermsHandler(req, res);
+        }
+        const numericYearId = parseInt(yearId, 10);
+        if (isNaN(numericYearId)) {
+            return getActiveTermsHandler(req, res);
+        }
+        const result = await pool.query("SELECT * FROM academic_terms WHERE academic_year_id = $1 ORDER BY id ASC", [numericYearId]);
         res.json(result.rows);
     } catch (err) {
         console.error(err.message);

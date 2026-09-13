@@ -32,6 +32,21 @@ async function runEssentialMigrations() {
             `);
         });
 
+        // 1.1 Subjects term_id & Unique Constraint Migration
+        await runStep("Checking subjects table term_id and constraint", async () => {
+            await client.query(`
+                DO $$
+                BEGIN
+                    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='subjects') THEN
+                        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='subjects' AND column_name='term_id') THEN
+                            ALTER TABLE subjects ADD COLUMN term_id INTEGER REFERENCES academic_terms(id) ON DELETE SET NULL;
+                        END IF;
+                        CREATE UNIQUE INDEX IF NOT EXISTS idx_subjects_sec_sub_term ON subjects (section_id, subject_name, term_id);
+                    END IF;
+                END $$;
+            `);
+        });
+
         // 2. Fee Plans Migration
         await runStep("Checking fee_plans columns", async () => {
             await client.query(`
