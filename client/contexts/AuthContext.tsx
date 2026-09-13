@@ -23,6 +23,7 @@ export interface AuthUser {
     employee_id?: number;
     incharge_class?: { class_id: number, section_id: number } | null;
     dashboard_access?: string;
+    token?: string;
 }
 
 interface AuthContextType {
