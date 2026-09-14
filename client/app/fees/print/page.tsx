@@ -238,7 +238,16 @@ function VoucherSlip({ v, serial, month, year, school, filterClassId }: { v: Vou
                             <div>• Late fine of {fmtAmt(lateFineAmount)} applicable post {fineCutoffDateStr} (Total: {fmtAmt(totalAmountAfterDueDate)}).</div>
                         )}
                     </div>
-                    <div className="developer-credit">Software designed and developed by FALCON SWIFT PVT. LTD. webiste: www.falconswift.online contact 03208624173, 03263392082</div>
+                    <div className="developer-credit">
+                        <div className="dev-title">
+                            Software Designed &amp; Developed by <span className="dev-name">FALCON SWIFT PVT. LTD.</span>
+                        </div>
+                        <div className="dev-contact">
+                            <span>Website: <span className="dev-link">www.falconswift.online</span></span>
+                            <span className="dev-sep">•</span>
+                            <span>Contact: <span className="dev-num">03208624173, 03263392082</span></span>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -828,11 +837,37 @@ export default function PrintSlipsPage() {
         /* Developer credit line */
         .developer-credit {
             text-align: center;
-            font-size: 6.5pt;
-            font-style: italic;
-            margin-top: 0.6mm;
-            color: #333;
+            margin-top: 0.7mm;
+            padding-top: 0.5mm;
+            border-top: 0.5pt solid #777;
+            color: #111;
             flex: 0 0 auto;
+            line-height: 1.25;
+            font-family: 'Times New Roman', Times, serif;
+        }
+        .developer-credit .dev-title {
+            font-size: 6.2pt;
+            letter-spacing: 0.15pt;
+        }
+        .developer-credit .dev-name {
+            font-weight: bold;
+            letter-spacing: 0.25pt;
+            color: #000;
+        }
+        .developer-credit .dev-contact {
+            font-size: 5.8pt;
+            margin-top: 0.2mm;
+            color: #222;
+        }
+        .developer-credit .dev-sep {
+            margin: 0 1.2mm;
+            font-weight: bold;
+            color: #666;
+        }
+        .developer-credit .dev-link,
+        .developer-credit .dev-num {
+            font-weight: bold;
+            color: #000;
         }
     `;
 
