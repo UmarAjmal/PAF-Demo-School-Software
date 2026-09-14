@@ -64,13 +64,54 @@ function StatusBadge({ status }: { status: string }) {
     return <span className="badge rounded-pill" style={{ backgroundColor: s.bg, fontSize: '0.7rem' }}>{s.label}</span>;
 }
 
-function normalizeSlips(rawSlips: any[]): SlipRow[] {
+function normalizeSlips(rawSlips: any[], trustedIds?: Set<number>): SlipRow[] {
     return (rawSlips || []).map((s: any) => {
-        const isTrusted = Boolean(
-            s.is_trusted ||
-            (s.category && s.category.trim().toLowerCase() === 'trusted') ||
-            (s.family_members && s.family_members.length > 0 && s.family_members.every((m: any) => (m.category || '').toLowerCase() === 'trusted'))
+        if (s.family_members && s.family_members.length > 0) {
+            s.family_members.forEach((m: any) => {
+                const sId = Number(m.student_id);
+                if ((trustedIds && trustedIds.has(sId)) || ((m.category || '').toString().trim().toLowerCase() === 'trusted')) {
+                    m.is_trusted = true;
+                    m.category = 'Trusted';
+                }
+            });
+        }
+
+        const isMemberTrusted = (m: any) => {
+            if (!m) return false;
+            if (m.is_trusted === true) return true;
+            if (((m && m.category) || '').toString().trim().toLowerCase() === 'trusted') return true;
+            const sId = Number(m.student_id);
+            if (sId && trustedIds && trustedIds.has(sId)) return true;
+            return false;
+        };
+
+        const isFamilyAllTrusted = Boolean(
+            s.is_family_slip && s.family_members && s.family_members.length > 0 &&
+            s.family_members.every((m: any) => isMemberTrusted(m))
         );
+        const isSingleTrusted = Boolean(!s.is_family_slip && isMemberTrusted(s));
+        const isTrusted = isFamilyAllTrusted || isSingleTrusted;
+
+        // For family slips, if the current lead student is trusted but active non-trusted siblings exist,
+        // repoint the slip's primary student to the senior active non-trusted sibling
+        if (s.is_family_slip && s.family_members && s.family_members.length > 0 && !isFamilyAllTrusted) {
+            const activePaying = s.family_members.filter((m: any) => 
+                (m.status || 'Active').toLowerCase() === 'active' && !isMemberTrusted(m)
+            );
+            if (activePaying.length > 0 && isMemberTrusted(s)) {
+                const lead = activePaying[0];
+                s.student_id = lead.student_id;
+                s.first_name = lead.first_name;
+                s.last_name = lead.last_name;
+                s.admission_no = lead.admission_no || s.admission_no;
+                s.class_name = lead.class_name;
+                s.class_id = lead.class_id;
+                if (lead.section_name) s.section_name = lead.section_name;
+                if (lead.father_name) s.father_name = lead.father_name;
+                s.category = lead.category || 'Normal';
+                s.is_trusted = false;
+            }
+        }
 
         if (isTrusted) {
             let nonTuitionTotal = 0;
@@ -144,6 +185,7 @@ export default function CollectFeePage() {
     const [notes, setNotes] = useState('');
     const [paying, setPaying] = useState(false);
     const [school, setSchool] = useState<SchoolInfo>({ school_name: '', school_address: '', phone_number: '', school_phone2: '', school_phone3: '', school_logo_url: '' });
+    const [trustedStudentIds, setTrustedStudentIds] = useState<Set<number>>(new Set());
 
     useEffect(() => {
         fetch(`${API}/academic`).then(r => r.json()).then(setClasses).catch(() => { });
@@ -188,28 +230,40 @@ export default function CollectFeePage() {
             }
         }).catch(() => { });
 
-        // Auto load slips if URL search parameter is provided
-        if (typeof window !== 'undefined') {
-            const urlParams = new URLSearchParams(window.location.search);
-            const querySearch = urlParams.get('search') || urlParams.get('student') || urlParams.get('family_id') || urlParams.get('student_id');
-            if (querySearch) {
-                setSearch(querySearch);
-                // Trigger slips load automatically
-                const currentYear = new Date().getFullYear().toString();
-                setLoading(true);
-                fetch(`${API}/fee-slips?year=${currentYear}`)
-                    .then(r => r.json())
-                    .then(data => {
-                        if (data && data.slips) {
-                            setSlips(normalizeSlips(data.slips));
-                            setStats(data.stats || null);
-                            setLoaded(true);
-                        }
-                    })
-                    .catch(() => { })
-                    .finally(() => setLoading(false));
+        // Pre-fetch trusted students list to ensure immediate accurate filtering
+        fetch(`${API}/students?limit=2000`).then(r => r.json()).then(data => {
+            const list = Array.isArray(data) ? data : (data?.students || []);
+            const newSet = new Set<number>();
+            list.forEach((s: any) => {
+                if ((s.category || '').toString().trim().toLowerCase() === 'trusted') {
+                    newSet.add(Number(s.student_id));
+                }
+            });
+            setTrustedStudentIds(newSet);
+            return newSet;
+        }).catch(() => new Set<number>()).then((currentTIds) => {
+            // Auto load slips if URL search parameter is provided
+            if (typeof window !== 'undefined') {
+                const urlParams = new URLSearchParams(window.location.search);
+                const querySearch = urlParams.get('search') || urlParams.get('student') || urlParams.get('family_id') || urlParams.get('student_id');
+                if (querySearch) {
+                    setSearch(querySearch);
+                    const currentYear = new Date().getFullYear().toString();
+                    setLoading(true);
+                    fetch(`${API}/fee-slips?year=${currentYear}`)
+                        .then(r => r.json())
+                        .then(data => {
+                            if (data && data.slips) {
+                                setSlips(normalizeSlips(data.slips, currentTIds));
+                                setStats(data.stats || null);
+                                setLoaded(true);
+                            }
+                        })
+                        .catch(() => { })
+                        .finally(() => setLoading(false));
+                }
             }
-        }
+        });
     }, []);
 
     const loadSlips = async () => {
@@ -225,10 +279,28 @@ export default function CollectFeePage() {
             if (targetYearId) {
                 params.append('academic_year_id', targetYearId);
             }
-            const r = await fetch(`${API}/fee-slips?${params.toString()}`);
+            const [r, stR] = await Promise.all([
+                fetch(`${API}/fee-slips?${params.toString()}`),
+                fetch(`${API}/students?limit=2000`).catch(() => null)
+            ]);
+            let currentTIds = trustedStudentIds;
+            if (stR && stR.ok) {
+                try {
+                    const stData = await stR.json();
+                    const list = Array.isArray(stData) ? stData : (stData?.students || []);
+                    const newSet = new Set<number>();
+                    list.forEach((s: any) => {
+                        if ((s.category || '').toString().trim().toLowerCase() === 'trusted') {
+                            newSet.add(Number(s.student_id));
+                        }
+                    });
+                    currentTIds = newSet;
+                    setTrustedStudentIds(newSet);
+                } catch {}
+            }
             const data = await r.json();
             if (!r.ok) throw new Error(data.error);
-            setSlips(normalizeSlips(data.slips));
+            setSlips(normalizeSlips(data.slips, currentTIds));
             setStats(data.stats || null);
             setLoaded(true);
         } catch (e: any) { notify.error(e.message); }
@@ -246,10 +318,28 @@ export default function CollectFeePage() {
             if (targetYearId) {
                 params.append('academic_year_id', targetYearId);
             }
-            const r = await fetch(`${API}/fee-slips?${params.toString()}`);
+            const [r, stR] = await Promise.all([
+                fetch(`${API}/fee-slips?${params.toString()}`),
+                fetch(`${API}/students?limit=2000`).catch(() => null)
+            ]);
+            let currentTIds = trustedStudentIds;
+            if (stR && stR.ok) {
+                try {
+                    const stData = await stR.json();
+                    const list = Array.isArray(stData) ? stData : (stData?.students || []);
+                    const newSet = new Set<number>();
+                    list.forEach((s: any) => {
+                        if ((s.category || '').toString().trim().toLowerCase() === 'trusted') {
+                            newSet.add(Number(s.student_id));
+                        }
+                    });
+                    currentTIds = newSet;
+                    setTrustedStudentIds(newSet);
+                } catch {}
+            }
             const data = await r.json();
             if (r.ok) {
-                setSlips(normalizeSlips(data.slips));
+                setSlips(normalizeSlips(data.slips, currentTIds));
                 setStats(data.stats || null);
             }
         } catch { }
@@ -263,11 +353,20 @@ export default function CollectFeePage() {
 
         const buildInitialHeads = (targetSlip: SlipRow, currentPayDate: string) => {
             const initialHeads: Record<string, string> = {};
-            const isTrusted = Boolean(
-                (targetSlip as any).is_trusted ||
-                (targetSlip.category && targetSlip.category.trim().toLowerCase() === 'trusted') ||
-                (targetSlip.family_members && targetSlip.family_members.length > 0 && targetSlip.family_members.every((m: any) => (m.category || '').toLowerCase() === 'trusted'))
+            const isTargetSingleTrusted = !targetSlip.is_family_slip && (
+                Boolean((targetSlip as any).is_trusted) ||
+                ((targetSlip.category || '').trim().toLowerCase() === 'trusted') ||
+                Boolean(targetSlip.student_id && trustedStudentIds.has(Number(targetSlip.student_id)))
             );
+            const isTargetFamilyAllTrusted = Boolean(
+                targetSlip.is_family_slip && targetSlip.family_members && targetSlip.family_members.length > 0 &&
+                targetSlip.family_members.every((m: any) => 
+                    (m.category || '').toLowerCase() === 'trusted' || 
+                    m.is_trusted || 
+                    (m.student_id && trustedStudentIds.has(Number(m.student_id)))
+                )
+            );
+            const isTrusted = isTargetSingleTrusted || isTargetFamilyAllTrusted;
 
             if (targetSlip.line_items && targetSlip.line_items.length > 0) {
                 targetSlip.line_items.forEach((item: any) => {
@@ -466,24 +565,40 @@ export default function CollectFeePage() {
         };
         const zeroPad = (n: number) => String(n).padStart(5, '0');
 
-        // Students list: exactly 1 row per student, no blank filler rows
-        const members: any[] = (slip.family_members && slip.family_members.length > 0)
+        // Students list: strictly exclude Trusted students from receiving slip
+        const isTrustedMember = (m: any) => {
+            if (!m) return false;
+            if (m.is_trusted === true) return true;
+            const cat = ((m && m.category) || '').toString().trim().toLowerCase();
+            if (cat === 'trusted') return true;
+            const sId = Number(m.student_id);
+            if (sId && trustedStudentIds.has(sId)) return true;
+            return false;
+        };
+
+        const rawMembers = (slip.family_members && slip.family_members.length > 0)
             ? slip.family_members
             : [{
+                student_id: slip.student_id,
                 first_name: slip.first_name,
                 last_name: slip.last_name,
                 father_name: slip.father_name || '',
                 class_name: slip.class_name,
-                section_name: slip.section_name
+                section_name: slip.section_name,
+                category: (slip as any).category,
+                is_trusted: (slip as any).is_trusted
             }];
 
-        const studentRows = members.map(m =>
+        const nonTrustedMembers = rawMembers.filter(m => !isTrustedMember(m));
+        const members: any[] = nonTrustedMembers;
+
+        const studentRows = members.length > 0 ? members.map(m =>
             `<tr>
                 <td>${escStr(m.first_name || '')} ${escStr(m.last_name || '')}</td>
                 <td>${escStr(m.father_name || slip.father_name || '')}</td>
                 <td>${escStr(m.class_name || '')}${m.section_name ? ` (${escStr(m.section_name)})` : ''}</td>
             </tr>`
-        ).join('');
+        ).join('') : `<tr><td colspan="3" style="text-align: center; color: #555; font-style: italic;">—</td></tr>`;
 
         // Fee Details: 1 row per fee head with Sr.#
         const lineItems = slip.line_items || [];
@@ -980,7 +1095,9 @@ export default function CollectFeePage() {
             // For family groups, ensure primary student info reflects the ACTIVE family lead (preferring paying students)
             if (g.is_family_slip && g.family_members && g.family_members.length > 0) {
                 const activeMembers = g.family_members.filter((m: any) => (m.status || 'Active').toLowerCase() === 'active');
-                const isTrust = (m: any) => ((m && m.category) || '').trim().toLowerCase() === 'trusted' || m.is_trusted;
+                const isTrust = (m: any) => ((m && m.category) || '').trim().toLowerCase() === 'trusted' 
+                    || m.is_trusted 
+                    || (m.student_id && trustedStudentIds.has(Number(m.student_id)));
                 const activePaying = activeMembers.filter((m: any) => !isTrust(m));
                 const activeLead = activePaying.length > 0 ? activePaying[0] : (activeMembers.length > 0 ? activeMembers[0] : null);
                 if (activeLead) {
@@ -995,11 +1112,14 @@ export default function CollectFeePage() {
             }
 
             const allMembersTrusted = Boolean(
-                g.family_members && g.family_members.length > 0 && g.family_members.every((m: any) => (m.category || '').toLowerCase() === 'trusted' || m.is_trusted)
+                g.family_members && g.family_members.length > 0 && g.family_members.every((m: any) => 
+                    (m.category || '').toLowerCase() === 'trusted' || m.is_trusted || (m.student_id && trustedStudentIds.has(Number(m.student_id)))
+                )
             );
             const isSingleTrusted = Boolean(
                 ((g.latest_slip?.category || '').toLowerCase() === 'trusted') ||
-                ((g.latest_unpaid as any)?.is_trusted)
+                ((g.latest_unpaid as any)?.is_trusted) ||
+                (g.student_id && trustedStudentIds.has(Number(g.student_id)))
             );
             const isTrustedGroup = g.is_family_slip ? allMembersTrusted : isSingleTrusted;
             g.is_trusted = isTrustedGroup;
@@ -1281,16 +1401,23 @@ export default function CollectFeePage() {
                                                                     <div className="d-flex flex-wrap gap-1 mt-1">
                                                                         {members.map((m, mi) => {
                                                                             const isMInactive = (m.status || 'Active').toLowerCase() !== 'active';
+                                                                            const isMTrusted = Boolean(
+                                                                                m.is_trusted ||
+                                                                                ((m && m.category) || '').trim().toLowerCase() === 'trusted' ||
+                                                                                (m.student_id && trustedStudentIds.has(Number(m.student_id)))
+                                                                            );
                                                                             return (
                                                                                 <span key={mi} style={{
                                                                                     fontSize: '0.7rem',
-                                                                                    backgroundColor: isMInactive ? '#f8d7da' : '#f0f9f9',
-                                                                                    color: isMInactive ? '#842029' : 'var(--primary-teal)',
-                                                                                    border: `1px solid ${isMInactive ? '#f5c2c7' : '#c5e8e8'}`,
+                                                                                    backgroundColor: isMInactive ? '#f8d7da' : (isMTrusted ? '#f8f9fa' : '#f0f9f9'),
+                                                                                    color: isMInactive ? '#842029' : (isMTrusted ? '#6c757d' : 'var(--primary-teal)'),
+                                                                                    border: `1px solid ${isMInactive ? '#f5c2c7' : (isMTrusted ? '#dee2e6' : '#c5e8e8')}`,
                                                                                     borderRadius: 4,
-                                                                                    padding: '1px 5px'
+                                                                                    padding: '1px 5px',
+                                                                                    textDecoration: isMTrusted ? 'line-through' : 'none'
                                                                                 }}>
                                                                                     {m.first_name} {m.last_name}{isMInactive ? ' (Inactive)' : ''}
+                                                                                    {isMTrusted ? ' [Trusted]' : ''}
                                                                                 </span>
                                                                             );
                                                                         })}
@@ -1659,7 +1786,9 @@ export default function CollectFeePage() {
                                             </div>
                                             <div className="d-flex flex-wrap gap-1">
                                                 {activeSlip.family_members!.map((m, i) => {
-                                                    const isTrust = ((m as any).category || '').trim().toLowerCase() === 'trusted' || (m as any).is_trusted;
+                                                    const isTrust = ((m as any).category || '').trim().toLowerCase() === 'trusted' 
+                                                        || (m as any).is_trusted 
+                                                        || (m.student_id && trustedStudentIds.has(Number(m.student_id)));
                                                     return (
                                                         <span key={i} style={{
                                                             fontSize: '0.72rem',

@@ -660,15 +660,25 @@ const syncFamilyLeadSlips = async () => {
             END DESC, c.class_id DESC, s.first_name ASC
         `;
 
-        // Find any unpaid or partial family slips assigned to an inactive student
+        // Find any family slips assigned to an inactive student or trusted student when non-trusted active siblings exist
         const orphanedSlips = await pool.query(`
             SELECT mfs.slip_id, mfs.family_id, mfs.student_id
             FROM monthly_fee_slips mfs
             JOIN students s ON mfs.student_id = s.student_id
             WHERE mfs.is_family_slip = TRUE 
-              AND mfs.status IN ('unpaid', 'partial')
-              AND LOWER(COALESCE(s.status, 'Active')) != 'active'
               AND mfs.family_id IS NOT NULL
+              AND (
+                  LOWER(COALESCE(s.status, 'Active')) != 'active'
+                  OR (
+                      LOWER(COALESCE(s.category, 'Normal')) = 'trusted'
+                      AND EXISTS (
+                          SELECT 1 FROM students s2 
+                          WHERE s2.family_id = mfs.family_id 
+                            AND LOWER(COALESCE(s2.status, 'Active')) = 'active'
+                            AND LOWER(COALESCE(s2.category, 'Normal')) != 'trusted'
+                      )
+                  )
+              )
         `);
 
         for (const slip of orphanedSlips.rows) {
@@ -677,7 +687,9 @@ const syncFamilyLeadSlips = async () => {
                 FROM students s
                 LEFT JOIN classes c ON s.class_id = c.class_id
                 WHERE s.family_id = $1 AND LOWER(COALESCE(s.status, 'Active')) = 'active'
-                ORDER BY ${CLASS_SENIORITY_ORDER}
+                ORDER BY 
+                    CASE WHEN LOWER(COALESCE(s.category, 'Normal')) = 'trusted' THEN 1 ELSE 0 END ASC,
+                    ${CLASS_SENIORITY_ORDER}
                 LIMIT 1
             `, [slip.family_id]);
 
@@ -887,24 +899,26 @@ router.get('/', async (req, res) => {
         result.rows.forEach(r => {
             if (r.is_family_slip && r.family_id) {
                 r.family_members = membersMap[r.family_id] || [];
-                // If the student on the slip is inactive, dynamically project the senior active member
-                const activeLead = r.family_members.find(m => (m.status || 'Active').toLowerCase() === 'active') || r.family_members[0];
-                if (activeLead && (r.student_status || '').toLowerCase() !== 'active') {
+                // If the student on the slip is inactive or trusted (while active non-trusted siblings exist), project the senior active non-trusted member
+                const activePaying = r.family_members.filter(m => (m.status || 'Active').toLowerCase() === 'active' && (m.category || '').trim().toLowerCase() !== 'trusted');
+                const activeLead = activePaying.length > 0 ? activePaying[0] : (r.family_members.find(m => (m.status || 'Active').toLowerCase() === 'active') || r.family_members[0]);
+                if (activeLead && ((r.student_status || '').toLowerCase() !== 'active' || ((r.category || '').trim().toLowerCase() === 'trusted' && activePaying.length > 0))) {
                     r.student_id = activeLead.student_id;
                     r.first_name = activeLead.first_name;
                     r.last_name = activeLead.last_name;
                     r.admission_no = activeLead.admission_no;
                     r.class_name = activeLead.class_name;
                     r.class_id = activeLead.class_id;
+                    r.category = activeLead.category;
                     if (activeLead.section_name) r.section_name = activeLead.section_name;
                     if (activeLead.father_name) r.father_name = activeLead.father_name;
                 }
             } else {
                 r.family_members = [];
             }
-            const isSingleTrusted = (r.category || '').trim().toLowerCase() === 'trusted';
-            const isFamilyAllTrusted = r.family_members.length > 0 && r.family_members.every(m => (m.category || '').trim().toLowerCase() === 'trusted');
-            r.is_trusted = isSingleTrusted || isFamilyAllTrusted;
+            const isSingleTrusted = !r.is_family_slip && (r.category || '').trim().toLowerCase() === 'trusted';
+            const isFamilyAllTrusted = r.is_family_slip && r.family_members.length > 0 && r.family_members.every(m => (m.category || '').trim().toLowerCase() === 'trusted');
+            r.is_trusted = r.is_family_slip ? isFamilyAllTrusted : isSingleTrusted;
 
             if (r.is_trusted) {
                 const nonTuitionHeads = (r.line_items || []).filter(item => {

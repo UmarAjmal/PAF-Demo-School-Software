@@ -36,7 +36,7 @@ function fmtDate(d: string | Date | null) {
 }
 function zeroPad(n: number, digits = 6) { return String(n).padStart(digits, '0'); }
 
-function VoucherSlip({ v, serial, month, year, school, filterClassId }: { v: Voucher; serial: number; month: string; year: string; school: SchoolInfo; filterClassId?: string }) {
+function VoucherSlip({ v, serial, month, year, school, filterClassId, trustedStudentIds }: { v: Voucher; serial: number; month: string; year: string; school: SchoolInfo; filterClassId?: string; trustedStudentIds?: Set<number> }) {
     const mIdx = parseInt(month) - 1;
     const monthName = MONTHS[mIdx] || '';
     const voucherNo = `${MONTH_SHORT[mIdx] || 'FEE'}${zeroPad(serial)}`;
@@ -44,8 +44,13 @@ function VoucherSlip({ v, serial, month, year, school, filterClassId }: { v: Vou
     const issueDate = v.primary.issue_date ? fmtDate(v.primary.issue_date) : fmtDate(new Date());
 
     const isTrustedMember = (m: any) => {
+        if (!m) return false;
+        if (m.is_trusted === true) return true;
         const cat = ((m && m.category) || '').toString().trim().toLowerCase();
-        return Boolean((m && m.is_trusted) || cat === 'trusted');
+        if (cat === 'trusted') return true;
+        const sId = Number(m.student_id);
+        if (sId && trustedStudentIds && trustedStudentIds.has(sId)) return true;
+        return false;
     };
 
     const allStudents: SlipData[] = [v.primary, ...v.siblings];
@@ -53,6 +58,7 @@ function VoucherSlip({ v, serial, month, year, school, filterClassId }: { v: Vou
     let membersSource = v.family_members && v.family_members.length > 0
         ? [...v.family_members]
         : allStudents.map(s => ({
+            student_id: s.student_id,
             first_name: s.first_name,
             last_name: s.last_name,
             father_name: s.father_name,
@@ -63,10 +69,9 @@ function VoucherSlip({ v, serial, month, year, school, filterClassId }: { v: Vou
             is_trusted: (s as any).is_trusted
         }));
 
-    // Exclude Trusted students from printing on the voucher
+    // Strictly exclude Trusted students from printing on the voucher
     const nonTrustedMembers = membersSource.filter(m => !isTrustedMember(m));
-    // If all members in the family are Trusted, keep membersSource so voucher isn't blank
-    const printableMembers = nonTrustedMembers.length > 0 ? nonTrustedMembers : membersSource;
+    const printableMembers = nonTrustedMembers;
 
     if (filterClassId && v.voucher_type === 'family') {
         printableMembers.sort((a, b) => {
@@ -270,13 +275,18 @@ function VoucherSlip({ v, serial, month, year, school, filterClassId }: { v: Vou
     );
 }
 
-function VoucherCard({ v, idx, selected, onToggle, filterClassId }: { v: Voucher; idx: number; selected: boolean; onToggle: () => void; filterClassId?: string }) {
+function VoucherCard({ v, idx, selected, onToggle, filterClassId, trustedStudentIds }: { v: Voucher; idx: number; selected: boolean; onToggle: () => void; filterClassId?: string; trustedStudentIds?: Set<number> }) {
     const remaining = parseFloat(v.total_family_amount as any) - parseFloat(v.total_paid as any);
     const isFam = v.voucher_type === 'family';
 
     const isTrustedMember = (m: any) => {
+        if (!m) return false;
+        if (m.is_trusted === true) return true;
         const cat = ((m && m.category) || '').toString().trim().toLowerCase();
-        return Boolean((m && m.is_trusted) || cat === 'trusted');
+        if (cat === 'trusted') return true;
+        const sId = Number(m.student_id);
+        if (sId && trustedStudentIds && trustedStudentIds.has(sId)) return true;
+        return false;
     };
 
     const allMembers = (v.family_members && v.family_members.length > 0)
@@ -284,7 +294,7 @@ function VoucherCard({ v, idx, selected, onToggle, filterClassId }: { v: Voucher
         : [v.primary, ...v.siblings];
 
     const nonTrustedMembers = allMembers.filter(m => !isTrustedMember(m));
-    const printableMembers = nonTrustedMembers.length > 0 ? nonTrustedMembers : allMembers;
+    const printableMembers = nonTrustedMembers;
 
     const displayPrimary = (filterClassId && isFam && printableMembers.length > 0)
         ? (printableMembers.find(m => m.class_id?.toString() === filterClassId) || printableMembers[0] || v.primary)
@@ -369,8 +379,19 @@ export default function PrintSlipsPage() {
     const [markingPrinted, setMarkingPrinted] = useState(false);
     const [message, setMessage] = useState<{ type: 'success' | 'danger'; text: string } | null>(null);
     const [printing, setPrinting] = useState(false);
+    const [trustedStudentIds, setTrustedStudentIds] = useState<Set<number>>(new Set());
 
     useEffect(() => {
+        fetch(`${API}/students?limit=2000`).then(r => r.json()).then(data => {
+            const list = Array.isArray(data) ? data : (data?.students || []);
+            const newSet = new Set<number>();
+            list.forEach((s: any) => {
+                if ((s.category || '').toString().trim().toLowerCase() === 'trusted') {
+                    newSet.add(Number(s.student_id));
+                }
+            });
+            setTrustedStudentIds(newSet);
+        }).catch(() => {});
         fetch(`${API}/academic`).then(r => r.json()).then(setClasses).catch(() => { });
         fetch(`${API}/academic/years`).then(r => r.json()).then(data => {
             if (Array.isArray(data)) {
@@ -448,9 +469,69 @@ export default function PrintSlipsPage() {
             const targetYearId = (selectedAcademicYear && selectedAcademicYear !== 'all') ? selectedAcademicYear : (activeYear ? activeYear.id.toString() : '');
             const yrParam = targetYearId ? `&academic_year_id=${targetYearId}` : '';
             const url = `${API}/fee-slips/print-queue?month=${month}&year=${year}${classId ? `&class_id=${classId}` : ''}${yrParam}`;
-            const r = await fetch(url);
+            const [r, stR] = await Promise.all([
+                fetch(url),
+                fetch(`${API}/students?limit=2000`).catch(() => null)
+            ]);
+            let currentTIds = trustedStudentIds;
+            if (stR && stR.ok) {
+                try {
+                    const stData = await stR.json();
+                    const list = Array.isArray(stData) ? stData : (stData?.students || []);
+                    const newSet = new Set<number>();
+                    list.forEach((s: any) => {
+                        if ((s.category || '').toString().trim().toLowerCase() === 'trusted') {
+                            newSet.add(Number(s.student_id));
+                        }
+                    });
+                    currentTIds = newSet;
+                    setTrustedStudentIds(newSet);
+                } catch {}
+            }
             const data = await r.json();
             if (!r.ok) throw new Error(data.error);
+
+            // Stamp trusted info and repoint family primary if primary is trusted
+            const enrichedVouchers = (data.vouchers || []).map((v: Voucher) => {
+                if (v.family_members && v.family_members.length > 0) {
+                    v.family_members.forEach((m: any) => {
+                        const sId = Number(m.student_id);
+                        if ((currentTIds && currentTIds.has(sId)) || (m.category || '').toLowerCase() === 'trusted') {
+                            m.is_trusted = true;
+                            m.category = 'Trusted';
+                        }
+                    });
+                }
+                const pId = Number(v.primary.student_id);
+                if ((currentTIds && currentTIds.has(pId)) || (v.primary.category || '').toLowerCase() === 'trusted') {
+                    v.primary.is_trusted = true;
+                    v.primary.category = 'Trusted';
+                }
+
+                if (v.voucher_type === 'family' && v.family_members && v.family_members.length > 0) {
+                    const payingSibling = v.family_members.find((m: any) => 
+                        !m.is_trusted && 
+                        (m.category || '').toLowerCase() !== 'trusted' && 
+                        !(currentTIds && currentTIds.has(Number(m.student_id))) &&
+                        (m.status || 'Active').toLowerCase() === 'active'
+                    );
+                    if (payingSibling && v.primary.is_trusted) {
+                        v.primary = {
+                            ...v.primary,
+                            student_id: payingSibling.student_id,
+                            first_name: payingSibling.first_name,
+                            last_name: payingSibling.last_name,
+                            admission_no: payingSibling.admission_no || v.primary.admission_no,
+                            class_name: payingSibling.class_name,
+                            c_class_id: payingSibling.class_id,
+                            class_id: payingSibling.class_id,
+                            category: payingSibling.category || 'Normal',
+                            is_trusted: false
+                        };
+                    }
+                }
+                return v;
+            });
 
             const getClassRank = (className?: string, classId?: number) => {
                 if (!className) return typeof classId === 'number' ? classId : 0;
@@ -472,7 +553,7 @@ export default function PrintSlipsPage() {
                 return sA.localeCompare(sB, undefined, { sensitivity: 'base' });
             };
 
-            const sortedList = (data.vouchers || []).sort((a: Voucher, b: Voucher) => {
+            const sortedList = (enrichedVouchers || []).sort((a: Voucher, b: Voucher) => {
                 const rankA = getClassRank(a.primary.class_name, a.primary.c_class_id || a.primary.class_id);
                 const rankB = getClassRank(b.primary.class_name, b.primary.c_class_id || b.primary.class_id);
                 if (rankA !== rankB) return rankB - rankA;
@@ -916,7 +997,7 @@ export default function PrintSlipsPage() {
                             breakAfter: pi < pages.length - 1 ? 'page' : 'auto',
                         }}>
                             {page.map((v, vi) => (
-                                <VoucherSlip key={vi} v={v} serial={getSerial(v)} month={month} year={year} school={school} filterClassId={classId || undefined} />
+                                <VoucherSlip key={vi} v={v} serial={getSerial(v)} month={month} year={year} school={school} filterClassId={classId || undefined} trustedStudentIds={trustedStudentIds} />
                             ))}
                             {page.length < 4 && Array.from({ length: 4 - page.length }).map((_, ei) => (
                                 <div key={`empty-${ei}`} style={{ width: '96mm', height: '138mm', visibility: 'hidden' }} />
@@ -1035,7 +1116,7 @@ export default function PrintSlipsPage() {
                                     </button>
                                 </div>
                             </div>
-                            {vouchers.map((v, i) => <VoucherCard key={i} v={v} idx={i} selected={selected.has(i)} onToggle={() => toggleSelect(i)} filterClassId={classId || undefined} />)}
+                            {vouchers.map((v, i) => <VoucherCard key={i} v={v} idx={i} selected={selected.has(i)} onToggle={() => toggleSelect(i)} filterClassId={classId || undefined} trustedStudentIds={trustedStudentIds} />)}
                         </div>
                         <div className="col-lg-4">
                             <div className="card border-0 shadow-sm mb-3">

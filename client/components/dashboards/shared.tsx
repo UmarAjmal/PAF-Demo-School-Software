@@ -899,15 +899,15 @@ function printDailyReceiptWindow(
         is_trusted: (slip as any).is_trusted
       }];
   const printableMembers = rawMembers.filter((m: any) => !isTrustedMember(m));
-  const members: any[] = printableMembers.length > 0 ? printableMembers : rawMembers;
+  const members: any[] = printableMembers;
 
-  const studentRows = members.map((m: any) =>
+  const studentRows = members.length > 0 ? members.map((m: any) =>
     `<tr>
       <td>${escStr(m.first_name || '')} ${escStr(m.last_name || '')}</td>
       <td>${escStr(m.father_name || slip.father_name || '')}</td>
       <td>${escStr(m.class_name || '')}${m.section_name ? ` (${escStr(m.section_name)})` : ''}</td>
     </tr>`
-  ).join('');
+  ).join('') : `<tr><td colspan="3" style="text-align: center; color: #555; font-style: italic;">—</td></tr>`;
 
   const lineItems = slip.line_items || [];
   let srNo = 0;
