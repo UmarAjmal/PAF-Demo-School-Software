@@ -509,9 +509,9 @@ export default function CollectFeePage() {
             </tr>`;
         }
 
-        // Subtotal row
+        // Total Payable row
         srNo++;
-        feeRows += `<tr class="subtotal-row">
+        feeRows += `<tr class="tr-total">
             <td>${srNo}</td>
             <td>Total Payable</td>
             <td>${fmtMoney(totalPayable)}</td>
@@ -519,90 +519,224 @@ export default function CollectFeePage() {
 
         // Receiving Amount & Remaining Balance
         feeRows += `
-            <tr class="divider-row">
-                <td colspan="2">Receiving Amount</td>
+            <tr>
+                <td colspan="2" style="text-align: left;">Receiving Amount</td>
                 <td>${fmtMoney(receivingAmt)}</td>
             </tr>
-            <tr class="bold-row">
-                <td colspan="2">Remaining Balance</td>
+            <tr class="tr-bold">
+                <td colspan="2" style="text-align: left;">Remaining Balance</td>
                 <td>${fmtMoney(remainingBalance)}</td>
             </tr>`;
 
         const phones = [school.phone_number, school.school_phone2, school.school_phone3].filter(Boolean).join(' ; ') || '0300-7730141 ; 0308-7696430 ; 067-3366383';
         const API_URL = (process.env.NEXT_PUBLIC_API_URL || "https://demo-school-soxa.onrender.com").replace(/\/+$/, '');
         const logoUrl = school.school_logo_url || `${API_URL}/icon.png`;
-        const schoolNameFormatted = (school.school_name || 'Falcon School System\nVehari').split('\n').join('<br>');
-        const schoolAddress = school.school_address || '83/M Madina Colony Vehari';
+        const schoolNameFormatted = (school.school_name || 'Shaheen Model High School').split('\n').map(escStr).join('<br>');
+        const schoolAddress = escStr(school.school_address || '83/M Madina Colony Vehari');
 
         const logoImgHtml = logoUrl
-            ? `<img src="${escStr(logoUrl)}" alt="Logo" style="width:100%;height:100%;object-fit:contain;border-radius:1.5mm;display:block;" />`
+            ? `<img src="${escStr(logoUrl)}" alt="Logo" />`
             : '';
 
         const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Fee Receipt</title>
+<title>Fee Receipt - Thermal Printer</title>
 <style>
-  @page { margin: 0; size: auto; }
+  @page {
+    size: 72mm auto;
+    margin: 0;
+  }
+  * {
+    box-sizing: border-box;
+  }
   html, body {
-    margin: 0; padding: 0; width: 72mm; box-sizing: border-box;
-    font-family: 'Times New Roman', Times, serif; color: #000; background: #fff;
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    max-width: 72mm;
+    font-family: 'Times New Roman', Times, serif;
+    color: #000;
+    background: #fff;
   }
+
   .voucher {
-    width: 100%; padding: 3mm; display: flex; flex-direction: column; box-sizing: border-box;
-    border: 2px solid #000; border-radius: 4mm; position: relative; background: #fff;
-  }
-  .voucher::before {
-    content: ""; position: absolute; inset: 2px; border: 1px solid #000; border-radius: 3.3mm; pointer-events: none;
+    width: 100%;
+    padding: 2.5mm 2mm;
+    box-sizing: border-box;
+    border: 1px solid #000;
+    background: #fff;
   }
 
-  .header { display: flex; align-items: center; gap: 2mm; margin-bottom: 2mm; }
+  /* Simple Header with Logo */
+  .header {
+    display: flex;
+    align-items: center;
+    gap: 2mm;
+    margin-bottom: 1.5mm;
+  }
   .logo-box {
-    width: 16mm; height: 16mm; border: none; background: transparent;
-    flex-shrink: 0; display: flex; align-items: center; justify-content: center; overflow: hidden;
+    width: 12mm;
+    height: 12mm;
+    flex-shrink: 0;
   }
-  .school-name { font-size: 11pt; font-weight: bold; line-height: 1.25; text-transform: uppercase; color: #000; }
+  .logo-box img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+  }
+  .school-info {
+    flex: 1 1 auto;
+  }
+  .school-name {
+    font-size: 9.5pt;
+    font-weight: bold;
+    line-height: 1.15;
+    text-transform: uppercase;
+  }
+  .school-details {
+    font-size: 7pt;
+    line-height: 1.2;
+    margin-top: 0.5mm;
+  }
 
-  .address-block { text-align: center; font-size: 8pt; margin-bottom: 1mm; line-height: 1.3; color: #000; }
-  .address-block p { margin: 0; }
-  hr { border: 0; border-top: 1px dashed #000; margin: 1.5mm 0; }
-  .voucher-title { text-align: center; font-size: 10.5pt; font-weight: bold; text-transform: uppercase; margin: 1mm 0; color: #000; }
+  hr.dashed {
+    border: 0;
+    border-top: 1px dashed #000;
+    margin: 1.2mm 0;
+  }
 
-  .info { font-size: 8pt; margin-bottom: 2mm; line-height: 1.4; color: #000; }
-  .info-row { display: flex; align-items: baseline; gap: 2mm; white-space: nowrap; margin-bottom: 0.5mm; }
-  .info-row .voucher-no { flex-shrink: 0; }
-  .info-row .family-id { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; text-align: right; }
-  .info-row2 { margin-bottom: 0.5mm; }
+  .voucher-title {
+    text-align: center;
+    font-size: 9pt;
+    font-weight: bold;
+    text-transform: uppercase;
+    margin: 0.5mm 0;
+  }
 
-  .section-label { font-size: 9.5pt; font-weight: bold; margin: 3mm 0 1mm; color: #000; }
+  /* Simple Info Metadata */
+  .info {
+    font-size: 7.5pt;
+    margin: 1mm 0 1.5mm;
+    line-height: 1.3;
+  }
+  .info-row {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 0.3mm;
+  }
 
-  table { width: 100%; border-collapse: collapse; font-size: 8pt; margin-bottom: 3mm; table-layout: fixed; word-wrap: break-word; color: #000; }
-  th, td { border: 1px solid #000; padding: 1.2mm 0.8mm; text-align: center; }
-  th { font-weight: bold; background: #e9e9e9; }
+  .section-title {
+    font-size: 8pt;
+    font-weight: bold;
+    margin: 1.5mm 0 0.8mm;
+  }
 
-  .students th:nth-child(1), .students td:nth-child(1) { text-align: left; }
-  .students th:nth-child(2), .students td:nth-child(2) { text-align: left; }
+  /* Compact Tables */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 7.2pt;
+    margin-bottom: 1.5mm;
+    table-layout: fixed;
+  }
+  th, td {
+    border: 1px solid #000;
+    padding: 0.6mm 0.5mm;
+    text-align: center;
+    line-height: 1.15;
+    word-wrap: break-word;
+  }
+  th {
+    font-weight: bold;
+    background: #f0f0f0;
+  }
 
-  .details th:nth-child(1), .details td:nth-child(1) { width: 12%; }
-  .details th:nth-child(2), .details td:nth-child(2) { text-align: left; }
-  .details th:nth-child(3), .details td:nth-child(3) { text-align: right; }
-  .details tr.subtotal-row td { font-weight: bold; background: #e9e9e9; }
-  .details tr.divider-row td { font-weight: bold; border-top: 2px solid #000; }
-  .details tr.bold-row td { font-weight: bold; }
-  .details tr.divider-row td:first-child,
-  .details tr.bold-row td:first-child { text-align: left; }
+  .tbl-students th:nth-child(1), .tbl-students td:nth-child(1) { width: 38%; text-align: left; }
+  .tbl-students th:nth-child(2), .tbl-students td:nth-child(2) { width: 38%; text-align: left; }
+  .tbl-students th:nth-child(3), .tbl-students td:nth-child(3) { width: 24%; text-align: center; }
 
-  .thank-you { text-align: center; font-size: 9.5pt; font-weight: bold; margin-top: 3mm; margin-bottom: 2mm; color: #000; }
-  .spacer { flex-grow: 1; }
+  .tbl-fee th:nth-child(1), .tbl-fee td:nth-child(1) { width: 12%; }
+  .tbl-fee th:nth-child(2), .tbl-fee td:nth-child(2) { width: 56%; text-align: left; }
+  .tbl-fee th:nth-child(3), .tbl-fee td:nth-child(3) { width: 32%; text-align: right; }
+
+  .tr-total td { font-weight: bold; background: #eee; }
+  .tr-bold td { font-weight: bold; }
+
+  /* Rules */
+  .rules-block {
+    font-size: 6.5pt;
+    line-height: 1.25;
+    margin-top: 1.2mm;
+    padding-top: 1mm;
+    border-top: 1px dashed #000;
+  }
+  .rules-block .rule-item {
+    display: block;
+  }
+
+  .thank-you {
+    text-align: center;
+    font-size: 8pt;
+    font-weight: bold;
+    margin-top: 2mm;
+    margin-bottom: 0.5mm;
+  }
+
+  /* Developer credit line */
+  .developer-credit {
+    text-align: center;
+    margin-top: 1.5mm;
+    border-top: 0.5px dashed #666;
+    padding-top: 0.8mm;
+    color: #111;
+    line-height: 1.25;
+    font-family: 'Times New Roman', Times, serif;
+  }
+  .developer-credit .dev-title {
+    font-size: 5.8pt;
+    letter-spacing: 0.15pt;
+  }
+  .developer-credit .dev-name {
+    font-weight: bold;
+    letter-spacing: 0.2pt;
+    color: #000;
+  }
+  .developer-credit .dev-contact {
+    font-size: 5.2pt;
+    margin-top: 0.3mm;
+    color: #222;
+  }
+  .developer-credit .dev-sep {
+    margin: 0 1mm;
+    font-weight: bold;
+    color: #666;
+  }
+  .developer-credit .dev-link,
+  .developer-credit .dev-num {
+    font-weight: bold;
+    color: #000;
+  }
 
   .print-btn {
-    display: block; width: 100%; margin-top: 4mm; padding: 8px; font-size: 10pt; font-weight: bold;
-    background: #215E61; color: #fff; border: none; border-radius: 4px; cursor: pointer; text-align: center;
+    display: block;
+    width: 100%;
+    margin-top: 3mm;
+    padding: 6px;
+    font-size: 9pt;
+    font-weight: bold;
+    background: #215E61;
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    text-align: center;
   }
   @media print {
     .print-btn { display: none !important; }
-    body { width: 72mm !important; }
+    html, body { width: 72mm !important; }
   }
 </style>
 </head>
@@ -610,36 +744,66 @@ export default function CollectFeePage() {
   <div class="voucher">
     <div class="header">
       <div class="logo-box">${logoImgHtml}</div>
-      <div class="school-name">${schoolNameFormatted}</div>
+      <div class="school-info">
+        <div class="school-name">${schoolNameFormatted}</div>
+        <div class="school-details">${schoolAddress}<br>${escStr(phones)}</div>
+      </div>
     </div>
-    <div class="address-block">
-      <p>${escStr(schoolAddress)}</p>
-      <p>${escStr(phones)}</p>
-    </div>
-    <hr><div class="voucher-title">Fee Receipt</div><hr>
+
+    <hr class="dashed">
+    <div class="voucher-title">FEE RECEIPT</div>
+    <hr class="dashed">
+
     <div class="info">
       <div class="info-row">
-        <div class="voucher-no">Voucher No: <strong><u>${zeroPad(slip.slip_id)}</u></strong></div>
-        <div class="family-id">Family ID: <strong><u>${escStr(slip.family_id || '—')}</u></strong></div>
+        <span>Voucher No: <strong><u>${zeroPad(slip.slip_id)}</u></strong></span>
+        <span>Family ID: <strong><u>${escStr(slip.family_id || '—')}</u></strong></span>
       </div>
-      <div class="info-row2">Fee Submission Date: <strong><u>${fmtD(submissionDate)}</u></strong></div>
+      <div class="info-row">
+        <span>Date: <strong><u>${fmtD(submissionDate)}</u></strong></span>
+      </div>
     </div>
 
-    <div class="section-label">Students Details</div>
-    <table class="students">
-      <thead><tr><th>Student Name</th><th>Father Name</th><th>Class (Sec)</th></tr></thead>
-      <tbody>${studentRows}</tbody>
+    <div class="section-title">Student Details</div>
+    <table class="tbl-students">
+      <thead>
+        <tr><th>Student Name</th><th>Father Name</th><th>Class (Sec)</th></tr>
+      </thead>
+      <tbody>
+        ${studentRows}
+      </tbody>
     </table>
 
-    <div class="section-label">Fee Details</div>
-    <table class="details">
-      <thead><tr><th>Sr.#</th><th>Fee Description</th><th>Amount</th></tr></thead>
-      <tbody>${feeRows}</tbody>
+    <div class="section-title">Fee Details</div>
+    <table class="tbl-fee">
+      <thead>
+        <tr><th>Sr.#</th><th>Fee Description</th><th>Amount</th></tr>
+      </thead>
+      <tbody>
+        ${feeRows}
+      </tbody>
     </table>
 
+    <div class="rules-block">
+      <span class="rule-item">1. Fee must be paid before due date.</span>
+      <span class="rule-item">2. Keep slip safe for verification.</span>
+      <span class="rule-item">3. Fee once paid is non-refundable.</span>
+    </div>
+
+    <hr class="dashed">
     <div class="thank-you">Thank You</div>
-    <div class="spacer"></div>
+    <div class="developer-credit">
+      <div class="dev-title">
+        Software Designed &amp; Developed by <span class="dev-name">FALCON SWIFT PVT. LTD.</span>
+      </div>
+      <div class="dev-contact">
+        <span>Website: <span class="dev-link">www.falconswift.online</span></span>
+        <span class="dev-sep">•</span>
+        <span>Contact: <span class="dev-num">03208624173, 03263392082</span></span>
+      </div>
+    </div>
   </div>
+
   <button class="print-btn" onclick="window.print()">🖨️ Print Receipt</button>
   <script>
     window.onload = function() {
