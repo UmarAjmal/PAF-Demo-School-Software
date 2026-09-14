@@ -524,33 +524,32 @@ export default function PrintSlipsPage() {
     };
 
     const printStyles = `
-        @page {
-            size: A4 portrait;
-            margin: 0;
-        }
-        * {
-            box-sizing: border-box;
-            -webkit-print-color-adjust: exact;
-            print-color-adjust: exact;
-        }
-        html, body {
-            margin: 0 !important;
-            padding: 0 !important;
-            width: 210mm;
-            height: 297mm;
-            font-family: 'Times New Roman', Times, serif;
-            color: #000;
-            background: #fff;
-        }
-        body {
-            padding: 5mm 6mm !important;
-        }
-
         @media print {
+            @page {
+                size: A4 portrait;
+                margin: 0;
+            }
+            * {
+                box-sizing: border-box;
+                -webkit-print-color-adjust: exact;
+                print-color-adjust: exact;
+            }
+            html, body {
+                margin: 0 !important;
+                padding: 0 !important;
+                width: 210mm !important;
+                height: 297mm !important;
+                font-family: 'Times New Roman', Times, serif !important;
+                color: #000 !important;
+                background: #fff !important;
+                overflow: visible !important;
+            }
+            body {
+                padding: 5mm 6mm !important;
+            }
             .sl-sidebar, .sl-topbar, .sl-overlay, .sl-toggle, .no-print { display: none !important; }
             .sl-layout { display: block !important; overflow: visible !important; height: auto !important; }
             .sl-main { margin-left: 0 !important; padding: 0 !important; width: 210mm !important; max-width: 210mm !important; overflow: visible !important; max-height: unset !important; height: auto !important; min-height: 0 !important; }
-            body, html { margin: 0 !important; padding: 5mm 6mm !important; width: 210mm !important; height: 297mm !important; background: #fff !important; overflow: visible !important; font-family: 'Times New Roman', Times, serif; color: #000; }
             .page-container {
                 page-break-after: always;
                 break-after: page;
@@ -866,7 +865,6 @@ export default function PrintSlipsPage() {
 
     return (
         <>
-            <style>{printStyles}</style>
             {school.school_logo_url && (
                 <img src={school.school_logo_url} alt="" aria-hidden="true"
                     style={{ position: 'absolute', width: 1, height: 1, opacity: 0, pointerEvents: 'none' }} />
