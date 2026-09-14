@@ -128,11 +128,11 @@ function buildPrintHtml(payload: CardPayload, isBatch: boolean): string {
     const issueDateStr = `${day} / ${month} / ${year}`;
 
     const cardsHtml = students.map((student) => {
-        const fullName = `${student.first_name || ''} ${student.last_name || ''}`.trim() || '[ Student Full Name ]';
-        const fatherName = student.father_name || '[ Father Full Name ]';
-        const classSec = `${meta.class_name || '[ Class ]'} — ${meta.section_name || '[ Section ]'}`;
-        const rollNo = student.roll_no || '&nbsp;';
-        const admNo = student.admission_no || '[ 0000 ]';
+        const fullName = `${student.first_name || ''} ${student.last_name || ''}`.trim() || '—';
+        const fatherName = (student.father_name && student.father_name.trim()) ? student.father_name.trim() : '—';
+        const classSec = `${meta.class_name || ''}${meta.section_name ? ` — ${meta.section_name}` : ''}`.trim() || '—';
+        const rollNo = (student.roll_no && String(student.roll_no).trim()) ? String(student.roll_no).trim() : '—';
+        const admNo = (student.admission_no && String(student.admission_no).trim()) ? String(student.admission_no).trim() : '—';
 
         let totalMarksSum = 0;
         let obtainedSum = 0;
@@ -174,9 +174,9 @@ function buildPrintHtml(payload: CardPayload, isBatch: boolean): string {
 
         const displayPct = student.percentage !== null && student.percentage !== undefined
             ? `${student.percentage}%`
-            : (calculatedOverallPct !== null ? `${calculatedOverallPct}%` : '[ __ % ]');
+            : (calculatedOverallPct !== null ? `${calculatedOverallPct}%` : '—');
 
-        const displayGrade = student.grade || (calculatedOverallPct !== null ? gradeFromPercentage(calculatedOverallPct) : '[ A/B/C ]');
+        const displayGrade = student.grade || (calculatedOverallPct !== null ? gradeFromPercentage(calculatedOverallPct) : '—');
 
         const effectivePctForStatus = student.percentage !== null && student.percentage !== undefined
             ? student.percentage
@@ -184,16 +184,16 @@ function buildPrintHtml(payload: CardPayload, isBatch: boolean): string {
 
         const displayStatus = effectivePctForStatus !== null
             ? (effectivePctForStatus >= 33 ? 'PASS' : 'FAIL')
-            : '[ PASS/FAIL ]';
+            : '—';
 
-        const displayPosition = student.ordinal_position || (student.position ? String(student.position) : '[ __ ]');
+        const displayPosition = student.ordinal_position || (student.position ? String(student.position) : '—');
 
         const totalRowHtml = `
             <tr class="total-row">
                 <td colspan="2">TOTAL</td>
                 <td>${fmtNum(totalMarksSum)}</td>
                 <td>${overallHasMarks ? fmtNum(obtainedSum) : ''}</td>
-                <td>${displayPct !== '[ __ % ]' ? displayPct : ''}</td>
+                <td>${displayPct !== '—' ? displayPct : ''}</td>
                 <td>&nbsp;</td>
             </tr>
         `;
@@ -666,6 +666,13 @@ export default function ResultCardPage() {
             if (!payload.students || payload.students.length === 0) {
                 throw new Error('No result data found for this student');
             }
+
+            // Sync father_name from loaded student list if missing from payload
+            const local = students.find((s) => s.student_id === studentId);
+            if (local?.father_name && (!payload.students[0].father_name || !payload.students[0].father_name.trim())) {
+                payload.students[0].father_name = local.father_name.trim();
+            }
+
             openInNewTab(buildPrintHtml(payload, false));
             notify.success('Result card opened.');
         } catch (e: any) {
@@ -684,6 +691,15 @@ export default function ResultCardPage() {
         setPrinting(true);
         try {
             const payload = await fetchCards(Array.from(selectedIds));
+            // Sync father_name for all batch items if missing from payload
+            payload.students.forEach((st) => {
+                if (!st.father_name || !st.father_name.trim()) {
+                    const local = students.find((s) => s.student_id === st.student_id);
+                    if (local?.father_name && local.father_name.trim()) {
+                        st.father_name = local.father_name.trim();
+                    }
+                }
+            });
             openInNewTab(buildPrintHtml(payload, true));
             notify.success('Printing result cards.');
         } catch (e: any) {

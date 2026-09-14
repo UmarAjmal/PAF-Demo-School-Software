@@ -752,7 +752,7 @@ router.get('/result-card/students', async (req, res) => {
                 s.student_id,
                 s.first_name,
                 s.last_name,
-                s.father_name,
+                COALESCE(NULLIF(TRIM(s.father_name), ''), NULLIF(TRIM(s.guardian_name), ''), '') AS father_name,
                 s.admission_no,
                 s.roll_no,
                 COUNT(em.mark_id)::int AS marked_subjects,
@@ -767,7 +767,7 @@ router.get('/result-card/students', async (req, res) => {
              WHERE s.class_id = $2
                AND s.section_id = $3
                AND s.status = 'Active'
-             GROUP BY s.student_id, s.first_name, s.last_name, s.father_name, s.admission_no, s.roll_no
+             GROUP BY s.student_id, s.first_name, s.last_name, s.father_name, s.guardian_name, s.admission_no, s.roll_no
              ORDER BY s.roll_no ASC NULLS LAST, s.first_name ASC, s.last_name ASC`,
             [termId, classId, sectionId]
         );
@@ -849,7 +849,9 @@ router.post('/result-card/data', async (req, res) => {
         }
 
         const studentsRes = await client.query(
-            `SELECT s.student_id, s.first_name, s.last_name, s.father_name, s.admission_no, s.roll_no
+            `SELECT s.student_id, s.first_name, s.last_name,
+                    COALESCE(NULLIF(TRIM(s.father_name), ''), NULLIF(TRIM(s.guardian_name), ''), '') AS father_name,
+                    s.admission_no, s.roll_no
              FROM students s
              WHERE s.class_id = $1
                AND s.section_id = $2
@@ -880,7 +882,7 @@ router.post('/result-card/data', async (req, res) => {
         }
 
         const subjectsRes = await client.query(
-            `SELECT subject_id, subject_name, subject_code
+            `SELECT subject_id, subject_name, subject_code, COALESCE(total_marks, 100) AS default_total_marks
              FROM subjects
              WHERE section_id = $1
              ORDER BY subject_id ASC`,
@@ -942,12 +944,15 @@ router.post('/result-card/data', async (req, res) => {
         const studentCards = selectedStudents.map(student => {
             const subjectRows = subjectsRes.rows.map(subject => {
                 const mark = markMap.get(`${student.student_id}:${subject.subject_id}`);
+                const totalMarks = mark && mark.total_marks !== null && mark.total_marks !== undefined
+                    ? Number(mark.total_marks)
+                    : (subject.default_total_marks ? Number(subject.default_total_marks) : 100);
                 return {
                     subject_id: subject.subject_id,
                     subject_name: subject.subject_name,
                     subject_code: subject.subject_code,
-                    total_marks: mark ? Number(mark.total_marks) : null,
-                    obtained_marks: mark ? Number(mark.obtained_marks) : null
+                    total_marks: totalMarks,
+                    obtained_marks: mark && mark.obtained_marks !== null && mark.obtained_marks !== undefined ? Number(mark.obtained_marks) : null
                 };
             });
 
@@ -960,7 +965,7 @@ router.post('/result-card/data', async (req, res) => {
                 student_id: student.student_id,
                 first_name: student.first_name,
                 last_name: student.last_name,
-                father_name: student.father_name || '',
+                father_name: (student.father_name || '').trim(),
                 admission_no: student.admission_no,
                 roll_no: student.roll_no,
                 position: rankInfo.position,
