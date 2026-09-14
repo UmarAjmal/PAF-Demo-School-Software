@@ -138,9 +138,12 @@ export default function AdminDashboard({ userName }: { userName: string }) {
         )}
       </div>
 
+      {(hasPermission('dash.admin_charts', 'read') || hasPermission('fees', 'read') || hasPermission('dashboard', 'read')) && (
+        <DailyFeeReceipts />
+      )}
+
       {hasPermission('dash.admin_charts', 'read') && (
         <>
-          <DailyFeeReceipts />
           {/* Fee Area Chart */}
           <div style={{ marginBottom: 20 }}>
             <Panel title="Daily Fee Collection    Last 14 Days" icon="bi-graph-up-arrow"

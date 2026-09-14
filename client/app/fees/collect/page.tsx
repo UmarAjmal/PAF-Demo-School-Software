@@ -135,7 +135,10 @@ export default function CollectFeePage() {
     const [headPayVals, setHeadPayVals] = useState<Record<string, string>>({});
     const [waivedItemIds, setWaivedItemIds] = useState<number[]>([]);
     const [payMethod, setPayMethod] = useState('cash');
-    const [payDate, setPayDate] = useState(new Date().toISOString().split('T')[0]);
+    const [payDate, setPayDate] = useState(() => {
+        const d = new Date();
+        return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().split('T')[0];
+    });
     const [receivedBy, setReceivedBy] = useState('');
     const [refNo, setRefNo] = useState('');
     const [notes, setNotes] = useState('');

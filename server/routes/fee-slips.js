@@ -1495,7 +1495,7 @@ router.get('/:id', async (req, res) => {
                    s.first_name, s.last_name, s.admission_no, s.father_name, s.father_phone, c.class_name, sec.section_name, s.category,
                    s.status AS student_status
             FROM monthly_fee_slips mfs
-            JOIN students s ON mfs.student_id = s.student_id
+            LEFT JOIN students s ON mfs.student_id = s.student_id
             LEFT JOIN classes c ON mfs.class_id = c.class_id
             LEFT JOIN sections sec ON s.section_id = sec.section_id
             LEFT JOIN academic_years ay ON mfs.academic_year_id = ay.id

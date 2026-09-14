@@ -604,20 +604,41 @@ router.get('/daily-fee-receipts', async (req, res) => {
 
         const statsQuery = pool.query(
             `SELECT 
-                COALESCE(SUM(CASE WHEN is_printed = true THEN amount_paid ELSE 0 END), 0) as printed_amount,
-                COALESCE(SUM(CASE WHEN is_printed = false THEN amount_paid ELSE 0 END), 0) as unprinted_amount,
-                COUNT(CASE WHEN is_printed = true THEN 1 END) as printed_count,
-                COUNT(CASE WHEN is_printed = false THEN 1 END) as unprinted_count,
-                COALESCE(SUM(amount_paid), 0) as total_amount
+                COALESCE(SUM(CASE WHEN is_printed = true THEN amount_paid ELSE 0 END), 0)::numeric as printed_amount,
+                COALESCE(SUM(CASE WHEN COALESCE(is_printed, false) = false THEN amount_paid ELSE 0 END), 0)::numeric as unprinted_amount,
+                COUNT(CASE WHEN is_printed = true THEN 1 END)::int as printed_count,
+                COUNT(CASE WHEN COALESCE(is_printed, false) = false THEN 1 END)::int as unprinted_count,
+                COALESCE(SUM(amount_paid), 0)::numeric as total_collected,
+                COALESCE(SUM(amount_paid), 0)::numeric as total_amount
              FROM fee_payments
              WHERE payment_date::date = $1`,
             [targetDate]
         );
 
         const listQuery = pool.query(
-            `SELECT fp.payment_id, fp.amount_paid, fp.payment_date, fp.payment_method, fp.is_printed,
-                    s.student_id, s.admission_no, s.first_name||' '||COALESCE(s.last_name, '') AS student_name,
-                    c.class_name, mfs.month, mfs.year, mfs.is_family_slip, mfs.family_id
+            `SELECT fp.payment_id, fp.slip_id, fp.amount_paid, fp.payment_date, fp.payment_method, 
+                    COALESCE(fp.is_printed, false) AS is_printed,
+                    fp.notes, fp.reference_no, fp.received_by,
+                    s.student_id, 
+                    COALESCE(
+                        s.admission_no, 
+                        (SELECT s2.admission_no FROM students s2 WHERE s2.family_id = mfs.family_id AND s2.status = 'Active' ORDER BY s2.student_id ASC LIMIT 1),
+                        (SELECT s2.admission_no FROM students s2 WHERE s2.family_id = mfs.family_id ORDER BY s2.student_id ASC LIMIT 1),
+                        mfs.family_id
+                    ) AS admission_no,
+                    COALESCE(
+                        NULLIF(TRIM(s.first_name||' '||COALESCE(s.last_name, '')), ''),
+                        (SELECT TRIM(s2.first_name||' '||COALESCE(s2.last_name, '')) FROM students s2 WHERE s2.family_id = mfs.family_id AND s2.status = 'Active' ORDER BY s2.student_id ASC LIMIT 1),
+                        (SELECT TRIM(s2.first_name||' '||COALESCE(s2.last_name, '')) FROM students s2 WHERE s2.family_id = mfs.family_id ORDER BY s2.student_id ASC LIMIT 1),
+                        'Family '||COALESCE(mfs.family_id, 'N/A')
+                    ) AS student_name,
+                    COALESCE(
+                        c.class_name,
+                        (SELECT c2.class_name FROM students s2 JOIN classes c2 ON s2.class_id=c2.class_id WHERE s2.family_id = mfs.family_id AND s2.status = 'Active' ORDER BY s2.student_id ASC LIMIT 1),
+                        (SELECT c2.class_name FROM students s2 JOIN classes c2 ON s2.class_id=c2.class_id WHERE s2.family_id = mfs.family_id ORDER BY s2.student_id ASC LIMIT 1),
+                        'Family'
+                    ) AS class_name,
+                    mfs.month, mfs.year, mfs.is_family_slip, mfs.family_id
              FROM fee_payments fp
              JOIN monthly_fee_slips mfs ON fp.slip_id=mfs.slip_id
              LEFT JOIN students s ON mfs.student_id=s.student_id

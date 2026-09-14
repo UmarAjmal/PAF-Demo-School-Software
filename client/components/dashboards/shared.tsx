@@ -849,12 +849,240 @@ export function RecentPaymentsTable({ rows }: { rows: any[] }) {
 }
 
 
+function printDailyReceiptWindow(
+  slip: any,
+  receivingAmt: number,
+  submissionDate: string,
+  prevPaid: number,
+  school: any = {}
+) {
+  const escStr = (text: unknown): string => {
+    return String(text ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  };
+
+  const totalPayable = parseFloat(slip.total_amount as any) || 0;
+  const totalReceivedBefore = prevPaid || 0;
+  const totalReceivedNow = totalReceivedBefore + receivingAmt;
+  const remainingBalance = Math.max(0, totalPayable - totalReceivedNow);
+
+  const fmtMoney = (n: number) => `${Number(n || 0).toLocaleString('en-PK')}/-`;
+  const fmtD = (d: string | null) => {
+    if (!d) return '\u2014';
+    try {
+      const dt = new Date(d);
+      return ("0" + dt.getDate()).slice(-2) + "-" + ("0" + (dt.getMonth() + 1)).slice(-2) + "-" + dt.getFullYear();
+    } catch {
+      return String(d);
+    }
+  };
+  const zeroPad = (n: number) => String(n).padStart(5, '0');
+
+  const members: any[] = (slip.family_members && slip.family_members.length > 0)
+    ? slip.family_members
+    : [{
+        first_name: slip.first_name,
+        last_name: slip.last_name,
+        father_name: slip.father_name || '',
+        class_name: slip.class_name,
+        section_name: slip.section_name
+      }];
+
+  const studentRows = members.map((m: any) =>
+    `<tr>
+      <td>${escStr(m.first_name || '')} ${escStr(m.last_name || '')}</td>
+      <td>${escStr(m.father_name || slip.father_name || '')}</td>
+      <td>${escStr(m.class_name || '')}${m.section_name ? ` (${escStr(m.section_name)})` : ''}</td>
+    </tr>`
+  ).join('');
+
+  const lineItems = slip.line_items || [];
+  let srNo = 0;
+  let feeRows = '';
+
+  lineItems.forEach((li: any) => {
+    srNo++;
+    const desc = (li.head_name || '').replace('Family Monthly Fee', 'Monthly Fee') + (li.note ? ` (${li.note})` : '');
+    feeRows += `<tr>
+      <td>${srNo}</td>
+      <td>${escStr(desc)}</td>
+      <td>${fmtMoney(parseFloat(li.amount as any) || 0)}</td>
+    </tr>`;
+  });
+
+  if (lineItems.length === 0) {
+    srNo++;
+    feeRows += `<tr>
+      <td>${srNo}</td>
+      <td>Monthly Fee</td>
+      <td>${fmtMoney(totalPayable)}</td>
+    </tr>`;
+  }
+
+  srNo++;
+  feeRows += `<tr class="subtotal-row">
+    <td>${srNo}</td>
+    <td>Total Payable</td>
+    <td>${fmtMoney(totalPayable)}</td>
+  </tr>`;
+
+  feeRows += `
+    <tr class="divider-row">
+      <td colspan="2">Receiving Amount</td>
+      <td>${fmtMoney(receivingAmt)}</td>
+    </tr>
+    <tr class="bold-row">
+      <td colspan="2">Remaining Balance</td>
+      <td>${fmtMoney(remainingBalance)}</td>
+    </tr>`;
+
+  const phones = [school.contact_number || school.phone_number, school.school_phone2, school.school_phone3].filter(Boolean).join(' ; ') || '0300-7730141 ; 0308-7696430 ; 067-3366383';
+  const API_URL = (process.env.NEXT_PUBLIC_API_URL || "https://demo-school-soxa.onrender.com").replace(/\/+$/, '');
+  let logoUrl = school.logo_url || school.school_logo_url || '';
+  if (logoUrl) {
+    if (!logoUrl.startsWith('data:') && !logoUrl.startsWith('http://') && !logoUrl.startsWith('https://')) {
+      logoUrl = `${API_URL}/${logoUrl.replace(/^\/+/, '')}`;
+    }
+  } else {
+    logoUrl = `${API_URL}/icon.png`;
+  }
+  const schoolNameFormatted = (school.school_name || 'Falcon School System\nVehari').split('\n').join('<br>');
+  const schoolAddress = school.address || school.school_address || '83/M Madina Colony Vehari';
+
+  const logoImgHtml = logoUrl
+    ? `<img src="${escStr(logoUrl)}" alt="Logo" style="width:100%;height:100%;object-fit:contain;border-radius:1.5mm;display:block;" />`
+    : '';
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Fee Receipt</title>
+<style>
+  @page { margin: 0; size: auto; }
+  html, body {
+    margin: 0; padding: 0; width: 72mm; box-sizing: border-box;
+    font-family: 'Times New Roman', Times, serif; color: #000; background: #fff;
+  }
+  .voucher {
+    width: 100%; padding: 3mm; display: flex; flex-direction: column; box-sizing: border-box;
+    border: 2px solid #000; border-radius: 4mm; position: relative; background: #fff;
+  }
+  .voucher::before {
+    content: ""; position: absolute; inset: 2px; border: 1px solid #000; border-radius: 3.3mm; pointer-events: none;
+  }
+  .header { display: flex; align-items: center; gap: 2mm; margin-bottom: 2mm; }
+  .logo-box {
+    width: 16mm; height: 16mm; border: none; background: transparent;
+    flex-shrink: 0; display: flex; align-items: center; justify-content: center; overflow: hidden;
+  }
+  .school-name { font-size: 11pt; font-weight: bold; line-height: 1.25; text-transform: uppercase; color: #000; }
+  .address-block { text-align: center; font-size: 8pt; margin-bottom: 1mm; line-height: 1.3; color: #000; }
+  .address-block p { margin: 0; }
+  hr { border: 0; border-top: 1px dashed #000; margin: 1.5mm 0; }
+  .voucher-title { text-align: center; font-size: 10.5pt; font-weight: bold; text-transform: uppercase; margin: 1mm 0; color: #000; }
+  .info { font-size: 8pt; margin-bottom: 2mm; line-height: 1.4; color: #000; }
+  .info-row { display: flex; align-items: baseline; gap: 2mm; white-space: nowrap; margin-bottom: 0.5mm; }
+  .info-row .voucher-no { flex-shrink: 0; }
+  .info-row .family-id { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; text-align: right; }
+  .info-row2 { margin-bottom: 0.5mm; }
+  .section-label { font-size: 9.5pt; font-weight: bold; margin: 3mm 0 1mm; color: #000; }
+  table { width: 100%; border-collapse: collapse; font-size: 8pt; margin-bottom: 3mm; table-layout: fixed; word-wrap: break-word; color: #000; }
+  th, td { border: 1px solid #000; padding: 1.2mm 0.8mm; text-align: center; }
+  th { font-weight: bold; background: #e9e9e9; }
+  .students th:nth-child(1), .students td:nth-child(1) { text-align: left; }
+  .students th:nth-child(2), .students td:nth-child(2) { text-align: left; }
+  .details th:nth-child(1), .details td:nth-child(1) { width: 12%; }
+  .details th:nth-child(2), .details td:nth-child(2) { text-align: left; }
+  .details th:nth-child(3), .details td:nth-child(3) { text-align: right; }
+  .details tr.subtotal-row td { font-weight: bold; background: #e9e9e9; }
+  .details tr.divider-row td { font-weight: bold; border-top: 2px solid #000; }
+  .details tr.bold-row td { font-weight: bold; }
+  .details tr.divider-row td:first-child,
+  .details tr.bold-row td:first-child { text-align: left; }
+  .thank-you { text-align: center; font-size: 9.5pt; font-weight: bold; margin-top: 3mm; margin-bottom: 2mm; color: #000; }
+  .spacer { flex-grow: 1; }
+  .print-btn {
+    display: block; width: 100%; margin-top: 4mm; padding: 8px; font-size: 10pt; font-weight: bold;
+    background: #215E61; color: #fff; border: none; border-radius: 4px; cursor: pointer; text-align: center;
+  }
+  @media print {
+    .print-btn { display: none !important; }
+    body { width: 72mm !important; }
+  }
+</style>
+</head>
+<body>
+  <div class="voucher">
+    <div class="header">
+      <div class="logo-box">${logoImgHtml}</div>
+      <div class="school-name">${schoolNameFormatted}</div>
+    </div>
+    <div class="address-block">
+      <p>${escStr(schoolAddress)}</p>
+      <p>${escStr(phones)}</p>
+    </div>
+    <hr><div class="voucher-title">Fee Receipt</div><hr>
+    <div class="info">
+      <div class="info-row">
+        <div class="voucher-no">Voucher No: <strong><u>${zeroPad(slip.slip_id)}</u></strong></div>
+        <div class="family-id">Family ID: <strong><u>${escStr(slip.family_id || '—')}</u></strong></div>
+      </div>
+      <div class="info-row2">Fee Submission Date: <strong><u>${fmtD(submissionDate)}</u></strong></div>
+    </div>
+
+    <div class="section-label">Students Details</div>
+    <table class="students">
+      <thead><tr><th>Student Name</th><th>Father Name</th><th>Class (Sec)</th></tr></thead>
+      <tbody>${studentRows}</tbody>
+    </table>
+
+    <div class="section-label">Fee Details</div>
+    <table class="details">
+      <thead><tr><th>Sr.#</th><th>Fee Description</th><th>Amount</th></tr></thead>
+      <tbody>${feeRows}</tbody>
+    </table>
+
+    <div class="thank-you">Thank You</div>
+    <div class="spacer"></div>
+  </div>
+  <button class="print-btn" onclick="window.print()">🖨️ Print Receipt</button>
+  <script>
+    window.onload = function() {
+      var img = document.querySelector('.logo-box img');
+      if (img && !img.complete) {
+        img.onload = function() { window.print(); };
+        img.onerror = function() { window.print(); };
+      } else {
+        window.print();
+      }
+    };
+  </script>
+</body>
+</html>`;
+
+  const w = window.open('', '_blank', 'width=420,height=680,toolbar=0,menubar=0,scrollbars=1');
+  if (w) {
+    w.document.write(html);
+    w.document.close();
+    w.focus();
+  }
+}
+
 export function DailyFeeReceipts() {
-  const [date, setDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [date, setDate] = useState(() => {
+    const d = new Date();
+    return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().split('T')[0];
+  });
   const [tab, setTab] = useState<'not_printed' | 'printed'>('not_printed');
   const [data, setData] = useState<any>({ stats: {}, payments: [] });
   const [loading, setLoading] = useState(true);
   const [showAmounts, setShowAmounts] = useState(false);
+  const [printingId, setPrintingId] = useState<number | null>(null);
 
   useEffect(() => {
     setLoading(true);
@@ -865,10 +1093,49 @@ export function DailyFeeReceipts() {
       }).catch(() => setLoading(false));
   }, [date]);
 
-  const filtered = data.payments?.filter((p: any) => tab === 'printed' ? p.is_printed : !p.is_printed) || [];
-  const totalCollected = data.stats?.total_collected || 0;
-  const unprintedCount = data.stats?.unprinted_count || 0;
-  const printedCount = data.stats?.printed_count || 0;
+  const filtered = (data.payments || []).filter((p: any) => tab === 'printed' ? p.is_printed : !p.is_printed);
+  const totalCollected = parseFloat(data.stats?.total_collected || data.stats?.total_amount || 0);
+  const unprintedCount = Number(data.stats?.unprinted_count || 0);
+  const printedCount = Number(data.stats?.printed_count || 0);
+
+  const handlePrintPayment = async (p: any) => {
+    setPrintingId(p.payment_id);
+    try {
+      const [slipRes, settingsRes] = await Promise.all([
+        fetch(`${API}/fee-slips/${p.slip_id}`),
+        fetch(`${API}/settings`).catch(() => null)
+      ]);
+      const slipData = slipRes.ok ? await slipRes.json() : null;
+      const schoolData = settingsRes && settingsRes.ok ? await settingsRes.json() : {};
+
+      if (slipData) {
+        const prevPaid = Math.max(0, parseFloat(slipData.paid_amount || 0) - parseFloat(p.amount_paid || 0));
+        printDailyReceiptWindow(slipData, parseFloat(p.amount_paid), p.payment_date, prevPaid, schoolData);
+      }
+
+      if (!p.is_printed) {
+        await fetch(`${API}/fee-slips/payments/${p.payment_id}/print`, { method: 'PUT' });
+        setData((prev: any) => {
+          const updated = (prev.payments || []).map((x: any) =>
+            x.payment_id === p.payment_id ? { ...x, is_printed: true } : x
+          );
+          return {
+            ...prev,
+            stats: {
+              ...prev.stats,
+              unprinted_count: Math.max(0, (prev.stats?.unprinted_count || 0) - 1),
+              printed_count: (prev.stats?.printed_count || 0) + 1,
+            },
+            payments: updated,
+          };
+        });
+      }
+    } catch (err) {
+      console.error('Failed to print receipt:', err);
+    } finally {
+      setPrintingId(null);
+    }
+  };
 
   const AmtCell = ({ v }: { v: number }) => (
     <span style={{ fontWeight: 700, color: '#1a2e3b' }}>
@@ -933,40 +1200,6 @@ export function DailyFeeReceipts() {
         </div>
 
         <div style={{ padding: '18px 22px', flex: 1 }}>
-          {/* Summary stats row */}
-          {/* {!loading && (
-            <div style={{ display: 'flex', gap: 12, marginBottom: 16 }}>
-              <div style={{
-                flex: 1, background: `${C.teal}0d`, borderRadius: 12,
-                padding: '12px 16px', border: `1px solid ${C.teal}22`,
-                display: 'flex', flexDirection: 'column', gap: 2,
-              }}>
-                <div style={{ fontSize: 10, fontWeight: 700, color: C.teal, textTransform: 'uppercase', letterSpacing: '0.07em' }}>
-                  Total Collected
-                </div>
-                <div style={{ fontSize: 22, fontWeight: 800, color: '#1a2e3b', lineHeight: 1.2 }}>
-                  {showAmounts ? fmtPKR(totalCollected) : 'Rs *****'}
-                </div>
-              </div>
-              <div style={{
-                flex: 1, background: '#fffbeb', borderRadius: 12,
-                padding: '12px 16px', border: '1px solid #fef08a',
-                display: 'flex', flexDirection: 'column', gap: 2,
-              }}>
-                <div style={{ fontSize: 10, fontWeight: 700, color: '#b45309', textTransform: 'uppercase', letterSpacing: '0.07em' }}>Not Printed</div>
-                <div style={{ fontSize: 22, fontWeight: 800, color: '#1a2e3b', lineHeight: 1.2 }}>{unprintedCount}</div>
-              </div>
-              <div style={{
-                flex: 1, background: '#f0fdf4', borderRadius: 12,
-                padding: '12px 16px', border: '1px solid #bbf7d0',
-                display: 'flex', flexDirection: 'column', gap: 2,
-              }}>
-                <div style={{ fontSize: 10, fontWeight: 700, color: '#15803d', textTransform: 'uppercase', letterSpacing: '0.07em' }}>Printed</div>
-                <div style={{ fontSize: 22, fontWeight: 800, color: '#1a2e3b', lineHeight: 1.2 }}>{printedCount}</div>
-              </div>
-            </div>
-          )} */}
-
           {loading ? <DashLoading /> : (
             <>
               {/* Tab Buttons */}
@@ -1034,7 +1267,12 @@ export function DailyFeeReceipts() {
                               }}>
                                 {(p.is_family_slip ? 'F' : (p.student_name || '?').charAt(0)).toUpperCase()}
                               </div>
-                              <span>{p.is_family_slip ? `Family: ${p.family_id}` : p.student_name}</span>
+                              <div>
+                                <div>{p.is_family_slip ? (p.student_name ? `${p.student_name} (${p.family_id})` : `Family: ${p.family_id}`) : p.student_name}</div>
+                                {p.admission_no && (
+                                  <div style={{ fontSize: 10, color: '#94a3b8', fontWeight: 500 }}>Adm #{p.admission_no}</div>
+                                )}
+                              </div>
                             </div>
                           </td>
                           <td style={{ padding: '11px 14px', color: '#64748b' }}>
@@ -1042,7 +1280,9 @@ export function DailyFeeReceipts() {
                               <span style={{ background: `${C.teal}1a`, color: C.teal, borderRadius: 20, padding: '2px 8px', fontSize: 11, fontWeight: 700 }}>Family</span>
                             ) : (p.class_name || '—')}
                           </td>
-                          <td style={{ padding: '11px 14px', color: '#64748b' }}>{p.month} {p.year}</td>
+                          <td style={{ padding: '11px 14px', color: '#64748b' }}>
+                            {typeof p.month === 'number' ? (MONTHS[p.month - 1] || p.month) : p.month} {p.year}
+                          </td>
                           <td style={{ padding: '11px 14px' }}><AmtCell v={parseFloat(p.amount_paid)} /></td>
                           <td style={{ padding: '11px 14px' }}>
                             <span style={{
@@ -1062,34 +1302,66 @@ export function DailyFeeReceipts() {
                               {p.is_printed ? 'Printed' : 'Not Printed'}
                             </span>
                           </td>
-                          <td style={{ padding: '11px 14px', textAlign: 'center' }}>
-                            <Link
-                              href={`/fees/collect?search=${encodeURIComponent(p.is_family_slip ? (p.family_id || '') : (p.student_name || ''))}`}
-                              title="Go to Fee Collection Page"
-                              style={{
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                width: 32,
-                                height: 32,
-                                borderRadius: '50%',
-                                background: 'linear-gradient(135deg, #FE7F2D 0%, #d66418 100%)',
-                                color: '#ffffff',
-                                textDecoration: 'none',
-                                boxShadow: '0 3px 10px rgba(254,127,45,0.4)',
-                                transition: 'all 0.2s ease',
-                              }}
-                              onMouseEnter={e => {
-                                (e.currentTarget as HTMLElement).style.transform = 'scale(1.12)';
-                                (e.currentTarget as HTMLElement).style.boxShadow = '0 5px 15px rgba(254,127,45,0.6)';
-                              }}
-                              onMouseLeave={e => {
-                                (e.currentTarget as HTMLElement).style.transform = 'none';
-                                (e.currentTarget as HTMLElement).style.boxShadow = '0 3px 10px rgba(254,127,45,0.4)';
-                              }}
-                            >
-                              <i className="bi bi-arrow-right-short" style={{ fontSize: 20, fontWeight: 800 }} />
-                            </Link>
+                          <td style={{ padding: '11px 14px', textAlign: 'center', whiteSpace: 'nowrap' }}>
+                            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                              <button
+                                onClick={() => handlePrintPayment(p)}
+                                disabled={printingId === p.payment_id}
+                                title={p.is_printed ? "Print Again" : "Print Receipt (Marks as Printed)"}
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  width: 30,
+                                  height: 30,
+                                  borderRadius: 8,
+                                  background: p.is_printed ? '#f0fdf4' : '#fffbeb',
+                                  color: p.is_printed ? '#16a34a' : '#b45309',
+                                  border: `1px solid ${p.is_printed ? '#bbf7d0' : '#fef08a'}`,
+                                  cursor: printingId === p.payment_id ? 'not-allowed' : 'pointer',
+                                  transition: 'all 0.15s ease',
+                                }}
+                                onMouseEnter={e => {
+                                  if (printingId !== p.payment_id) {
+                                    (e.currentTarget as HTMLElement).style.transform = 'scale(1.1)';
+                                  }
+                                }}
+                                onMouseLeave={e => {
+                                  (e.currentTarget as HTMLElement).style.transform = 'none';
+                                }}
+                              >
+                                {printingId === p.payment_id ? (
+                                  <span className="spinner-border spinner-border-sm" style={{ width: 13, height: 13 }} />
+                                ) : (
+                                  <i className="bi bi-printer" style={{ fontSize: 13 }} />
+                                )}
+                              </button>
+                              <Link
+                                href={`/fees/collect?search=${encodeURIComponent(p.admission_no || (p.is_family_slip ? (p.family_id || '') : (p.student_name || '')))}`}
+                                title="Go to Fee Collection Form"
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  width: 30,
+                                  height: 30,
+                                  borderRadius: 8,
+                                  background: 'linear-gradient(135deg, #FE7F2D 0%, #d66418 100%)',
+                                  color: '#ffffff',
+                                  textDecoration: 'none',
+                                  boxShadow: '0 2px 6px rgba(254,127,45,0.35)',
+                                  transition: 'all 0.15s ease',
+                                }}
+                                onMouseEnter={e => {
+                                  (e.currentTarget as HTMLElement).style.transform = 'scale(1.1)';
+                                }}
+                                onMouseLeave={e => {
+                                  (e.currentTarget as HTMLElement).style.transform = 'none';
+                                }}
+                              >
+                                <i className="bi bi-arrow-right-short" style={{ fontSize: 18, fontWeight: 800 }} />
+                              </Link>
+                            </div>
                           </td>
                         </tr>
                       ))}
