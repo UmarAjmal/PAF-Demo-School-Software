@@ -93,16 +93,16 @@ async function getUserContext(client, userId) {
 
 async function getActiveAcademicYear(client) {
     let yearRes = await client.query(
-        `SELECT id, year_name, is_active
+        `SELECT id, year_name, is_active, status
          FROM academic_years
-         WHERE is_active = TRUE
+         WHERE is_active = TRUE OR status = 'active'
          ORDER BY id DESC
          LIMIT 1`
     );
 
     if (yearRes.rows.length === 0) {
         yearRes = await client.query(
-            `SELECT id, year_name, is_active
+            `SELECT id, year_name, is_active, status
              FROM academic_years
              ORDER BY id DESC
              LIMIT 1`
@@ -110,6 +110,36 @@ async function getActiveAcademicYear(client) {
     }
 
     return yearRes.rows[0] || null;
+}
+
+async function getTermsForAcademicYear(client, academicYearId) {
+    if (!academicYearId) return [];
+    let termRes = await client.query(
+        `SELECT id, term_name, start_date, end_date
+         FROM academic_terms
+         WHERE academic_year_id = $1
+         ORDER BY id ASC`,
+        [academicYearId]
+    );
+
+    if (termRes.rows.length === 0) {
+        const defaultNames = ['First Term', 'Mid Term', 'Final Term'];
+        for (const tName of defaultNames) {
+            await client.query(
+                `INSERT INTO academic_terms (academic_year_id, term_name) VALUES ($1, $2)`,
+                [academicYearId, tName]
+            );
+        }
+        termRes = await client.query(
+            `SELECT id, term_name, start_date, end_date
+             FROM academic_terms
+             WHERE academic_year_id = $1
+             ORDER BY id ASC`,
+            [academicYearId]
+        );
+    }
+
+    return termRes.rows;
 }
 
 async function canTeacherAccessSheet(client, employeeId, classId, sectionId, subjectId) {
@@ -243,13 +273,7 @@ router.get('/context', async (req, res) => {
             return res.status(404).json({ error: 'No academic year found. Please create/activate one first.' });
         }
 
-        const termRes = await client.query(
-            `SELECT id, term_name, start_date, end_date
-             FROM academic_terms
-             WHERE academic_year_id = $1
-             ORDER BY id ASC`,
-            [activeYear.id]
-        );
+        const termRows = await getTermsForAcademicYear(client, activeYear.id);
 
         let classes = [];
         let sections = [];
@@ -261,11 +285,13 @@ router.get('/context', async (req, res) => {
             const sectionRes = await client.query(`SELECT section_id, section_name, class_id FROM sections ORDER BY class_id, section_name ASC`);
             const subjectRes = await client.query(
                 `SELECT s.subject_id, s.subject_name, s.subject_code, s.term_id,
+                        t.term_name,
                         sec.section_id, sec.section_name,
                         c.class_id, c.class_name
                  FROM subjects s
                  JOIN sections sec ON sec.section_id = s.section_id
                  JOIN classes c ON c.class_id = sec.class_id
+                 LEFT JOIN academic_terms t ON t.id = s.term_id
                  ORDER BY c.class_name, sec.section_name, s.subject_name`
             );
 
@@ -278,7 +304,7 @@ router.get('/context', async (req, res) => {
                 return res.json({
                     is_admin: false,
                     active_year: activeYear,
-                    terms: termRes.rows,
+                    terms: termRows,
                     classes: [],
                     sections: [],
                     subjects: []
@@ -289,11 +315,13 @@ router.get('/context', async (req, res) => {
                 `SELECT DISTINCT
                     c.class_id, c.class_name,
                     sec.section_id, sec.section_name,
-                    s.subject_id, s.subject_name, s.subject_code, s.term_id
+                    s.subject_id, s.subject_name, s.subject_code, s.term_id,
+                    t.term_name
                  FROM teacher_subject_assignment tsa
                  JOIN subjects s ON s.subject_id = tsa.subject_id
                  JOIN sections sec ON sec.section_id = s.section_id
                  JOIN classes c ON c.class_id = sec.class_id
+                 LEFT JOIN academic_terms t ON t.id = s.term_id
                  WHERE tsa.employee_id = $1
 
                  UNION
@@ -301,11 +329,13 @@ router.get('/context', async (req, res) => {
                  SELECT DISTINCT
                     c.class_id, c.class_name,
                     sec.section_id, sec.section_name,
-                    s.subject_id, s.subject_name, s.subject_code, s.term_id
+                    s.subject_id, s.subject_name, s.subject_code, s.term_id,
+                    t.term_name
                  FROM teacher_class_assignment tca
                  JOIN classes c ON c.class_id = tca.class_id
                  JOIN sections sec ON sec.section_id = tca.section_id
                  LEFT JOIN subjects s ON s.section_id = sec.section_id
+                 LEFT JOIN academic_terms t ON t.id = s.term_id
                  WHERE tca.employee_id = $1 AND tca.is_class_teacher = true
 
                  ORDER BY class_name, section_name, subject_name`,
@@ -333,6 +363,7 @@ router.get('/context', async (req, res) => {
                     subject_name: r.subject_name,
                     subject_code: r.subject_code,
                     term_id: r.term_id,
+                    term_name: r.term_name,
                     section_id: r.section_id,
                     section_name: r.section_name,
                     class_id: r.class_id,
@@ -343,7 +374,7 @@ router.get('/context', async (req, res) => {
         res.json({
             is_admin: ctx.isAdmin,
             active_year: activeYear,
-            terms: termRes.rows,
+            terms: termRows,
             classes,
             sections,
             subjects
@@ -372,13 +403,7 @@ router.get('/context/class-teacher', async (req, res) => {
             return res.status(404).json({ error: 'No academic year found. Please create/activate one first.' });
         }
 
-        const termRes = await client.query(
-            `SELECT id, term_name, start_date, end_date
-             FROM academic_terms
-             WHERE academic_year_id = $1
-             ORDER BY id ASC`,
-            [activeYear.id]
-        );
+        const termRows = await getTermsForAcademicYear(client, activeYear.id);
 
         let classes = [];
         let sections = [];
@@ -393,7 +418,7 @@ router.get('/context/class-teacher', async (req, res) => {
                 return res.json({
                     is_admin: false,
                     active_year: activeYear,
-                    terms: termRes.rows,
+                    terms: termRows,
                     classes: [],
                     sections: []
                 });
@@ -430,7 +455,7 @@ router.get('/context/class-teacher', async (req, res) => {
         res.json({
             is_admin: ctx.isAdmin,
             active_year: activeYear,
-            terms: termRes.rows,
+            terms: termRows,
             classes,
             sections
         });
@@ -1566,11 +1591,13 @@ router.get('/tests/context', async (req, res) => {
             const sectionRes = await client.query(`SELECT section_id, section_name, class_id FROM sections ORDER BY class_id, section_name ASC`);
             const subjectRes = await client.query(
                 `SELECT s.subject_id, s.subject_name, s.subject_code, s.term_id,
+                        t.term_name,
                         sec.section_id, sec.section_name,
                         c.class_id, c.class_name
                  FROM subjects s
                  JOIN sections sec ON sec.section_id = s.section_id
                  JOIN classes c ON c.class_id = sec.class_id
+                 LEFT JOIN academic_terms t ON t.id = s.term_id
                  ORDER BY c.class_name, sec.section_name, s.subject_name`
             );
             classes  = classRes.rows;
@@ -1584,11 +1611,13 @@ router.get('/tests/context', async (req, res) => {
                 `SELECT DISTINCT
                     c.class_id, c.class_name,
                     sec.section_id, sec.section_name,
-                    s.subject_id, s.subject_name, s.subject_code, s.term_id
+                    s.subject_id, s.subject_name, s.subject_code, s.term_id,
+                    t.term_name
                  FROM teacher_subject_assignment tsa
                  JOIN subjects s ON s.subject_id = tsa.subject_id
                  JOIN sections sec ON sec.section_id = s.section_id
                  JOIN classes c ON c.class_id = sec.class_id
+                 LEFT JOIN academic_terms t ON t.id = s.term_id
                  WHERE tsa.employee_id = $1
 
                  UNION
@@ -1596,11 +1625,13 @@ router.get('/tests/context', async (req, res) => {
                  SELECT DISTINCT
                     c.class_id, c.class_name,
                     sec.section_id, sec.section_name,
-                    s.subject_id, s.subject_name, s.subject_code, s.term_id
+                    s.subject_id, s.subject_name, s.subject_code, s.term_id,
+                    t.term_name
                  FROM teacher_class_assignment tca
                  JOIN classes c ON c.class_id = tca.class_id
                  JOIN sections sec ON sec.section_id = tca.section_id
                  LEFT JOIN subjects s ON s.section_id = sec.section_id
+                 LEFT JOIN academic_terms t ON t.id = s.term_id
                  WHERE tca.employee_id = $1 AND tca.is_class_teacher = true
 
                  ORDER BY class_name, section_name, subject_name`,
@@ -1617,24 +1648,14 @@ router.get('/tests/context', async (req, res) => {
                 .filter(r => r.subject_id !== null && r.subject_id !== undefined)
                 .map(r => ({
                     subject_id: r.subject_id, subject_name: r.subject_name, subject_code: r.subject_code, term_id: r.term_id,
+                    term_name: r.term_name,
                     section_id: r.section_id, section_name: r.section_name,
                     class_id: r.class_id, class_name: r.class_name
                 }));
         }
 
         const activeYear = await getActiveAcademicYear(client);
-        let terms = [];
-        if (activeYear) {
-            const termRes = await client.query(
-                `SELECT id, term_name, start_date, end_date FROM academic_terms WHERE academic_year_id = $1 ORDER BY id ASC`,
-                [activeYear.id]
-            );
-            terms = termRes.rows;
-        }
-        if (terms.length === 0) {
-            const termRes = await client.query(`SELECT id, term_name, start_date, end_date FROM academic_terms ORDER BY id ASC`);
-            terms = termRes.rows;
-        }
+        const terms = activeYear ? await getTermsForAcademicYear(client, activeYear.id) : [];
 
         res.json({ is_admin: ctx.isAdmin || ctx.isSupervisor, active_year: activeYear, terms, classes, sections, subjects });
     } catch (err) {

@@ -8,21 +8,41 @@ const pool = require('../db');
 // Get Active Terms for Subjects Dropdown
 router.get('/terms', async (req, res) => {
     try {
-        const query = `
+        let activeYearRes = await pool.query(
+            "SELECT id, year_name FROM academic_years WHERE is_active = true OR status = 'active' ORDER BY id DESC LIMIT 1"
+        );
+        if (activeYearRes.rows.length === 0) {
+            activeYearRes = await pool.query(
+                "SELECT id, year_name FROM academic_years ORDER BY id DESC LIMIT 1"
+            );
+        }
+        if (activeYearRes.rows.length === 0) {
+            return res.json([]);
+        }
+
+        const activeYearId = activeYearRes.rows[0].id;
+        let result = await pool.query(`
             SELECT t.id, t.term_name, t.academic_year_id, y.year_name, y.is_active
             FROM academic_terms t
             JOIN academic_years y ON t.academic_year_id = y.id
-            WHERE y.is_active = true OR y.status = 'active'
+            WHERE y.id = $1
             ORDER BY t.id ASC
-        `;
-        let result = await pool.query(query);
+        `, [activeYearId]);
+
         if (result.rows.length === 0) {
+            for (const tName of ['First Term', 'Mid Term', 'Final Term']) {
+                await pool.query(
+                    `INSERT INTO academic_terms (academic_year_id, term_name) VALUES ($1, $2)`,
+                    [activeYearId, tName]
+                );
+            }
             result = await pool.query(`
                 SELECT t.id, t.term_name, t.academic_year_id, y.year_name, y.is_active
                 FROM academic_terms t
-                LEFT JOIN academic_years y ON t.academic_year_id = y.id
+                JOIN academic_years y ON t.academic_year_id = y.id
+                WHERE y.id = $1
                 ORDER BY t.id ASC
-            `);
+            `, [activeYearId]);
         }
         res.json(result.rows);
     } catch (err) {

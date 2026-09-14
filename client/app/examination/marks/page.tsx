@@ -12,6 +12,7 @@ type SubjectItem = {
     subject_name: string;
     subject_code?: string | null;
     term_id?: number | null;
+    term_name?: string | null;
     section_id: number;
     section_name: string;
     class_id: number;
@@ -79,6 +80,25 @@ export default function ExaminationMarksPage() {
         if (list.length === 0) {
             list = subjects.filter(s => s.class_id === Number(selectedClass));
         }
+
+        // Flow [Term -> Class -> Section -> Subject]:
+        // Check if there are term-specific subjects for the selected term
+        if (selectedTerm) {
+            const currentTerm = terms.find(t => String(t.id) === String(selectedTerm));
+            const currentTermName = currentTerm ? currentTerm.term_name.trim().toLowerCase() : '';
+
+            const termMatches = list.filter(s => {
+                if (s.term_id && String(s.term_id) === String(selectedTerm)) return true;
+                const subTermName = (s.term_name || '').trim().toLowerCase();
+                if (currentTermName && subTermName && subTermName === currentTermName) return true;
+                return false;
+            });
+
+            if (termMatches.length > 0) {
+                list = termMatches;
+            }
+        }
+
         const seen = new Set<string>();
         return list.filter(s => {
             const key = (s.subject_name || '').toLowerCase().trim();
@@ -86,7 +106,7 @@ export default function ExaminationMarksPage() {
             seen.add(key);
             return true;
         });
-    }, [subjects, selectedClass, selectedSection]);
+    }, [subjects, selectedClass, selectedSection, selectedTerm, terms]);
 
     const readyToLoadSheet = !!(selectedTerm && selectedClass && selectedSection && selectedSubject && user?.id);
 
@@ -380,7 +400,10 @@ export default function ExaminationMarksPage() {
                             <select
                                 className="form-select form-select-md border-2"
                                 value={selectedTerm}
-                                onChange={(e) => setSelectedTerm(e.target.value)}
+                                onChange={(e) => {
+                                    setSelectedTerm(e.target.value);
+                                    setSelectedSubject('');
+                                }}
                                 disabled={loadingContext}
                             >
                                 <option value="">-- Select Term --</option>
@@ -395,8 +418,12 @@ export default function ExaminationMarksPage() {
                             <select
                                 className="form-select form-select-md border-2"
                                 value={selectedClass}
-                                onChange={(e) => setSelectedClass(e.target.value)}
-                                disabled={loadingContext}
+                                onChange={(e) => {
+                                    setSelectedClass(e.target.value);
+                                    setSelectedSection('');
+                                    setSelectedSubject('');
+                                }}
+                                disabled={!selectedTerm || loadingContext}
                             >
                                 <option value="">-- Select Class --</option>
                                 {classes.map(c => <option key={c.class_id} value={c.class_id}>{c.class_name}</option>)}
@@ -410,7 +437,10 @@ export default function ExaminationMarksPage() {
                             <select
                                 className="form-select form-select-md border-2"
                                 value={selectedSection}
-                                onChange={(e) => setSelectedSection(e.target.value)}
+                                onChange={(e) => {
+                                    setSelectedSection(e.target.value);
+                                    setSelectedSubject('');
+                                }}
                                 disabled={!selectedClass || loadingContext}
                             >
                                 <option value="">-- Select Section --</option>

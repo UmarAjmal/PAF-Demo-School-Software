@@ -229,21 +229,41 @@ router.put('/years/activate/:id', async (req, res) => {
 // Get Terms for Active Academic Year (or All Terms)
 const getActiveTermsHandler = async (req, res) => {
     try {
-        const query = `
+        let activeYearRes = await pool.query(
+            "SELECT id, year_name FROM academic_years WHERE is_active = true OR status = 'active' ORDER BY id DESC LIMIT 1"
+        );
+        if (activeYearRes.rows.length === 0) {
+            activeYearRes = await pool.query(
+                "SELECT id, year_name FROM academic_years ORDER BY id DESC LIMIT 1"
+            );
+        }
+        if (activeYearRes.rows.length === 0) {
+            return res.json([]);
+        }
+
+        const activeYearId = activeYearRes.rows[0].id;
+        let result = await pool.query(`
             SELECT t.id, t.term_name, t.academic_year_id, y.year_name, y.is_active
             FROM academic_terms t
             JOIN academic_years y ON t.academic_year_id = y.id
-            WHERE y.is_active = true OR y.status = 'active'
+            WHERE y.id = $1
             ORDER BY t.id ASC
-        `;
-        let result = await pool.query(query);
+        `, [activeYearId]);
+
         if (result.rows.length === 0) {
+            for (const tName of ['First Term', 'Mid Term', 'Final Term']) {
+                await pool.query(
+                    `INSERT INTO academic_terms (academic_year_id, term_name) VALUES ($1, $2)`,
+                    [activeYearId, tName]
+                );
+            }
             result = await pool.query(`
                 SELECT t.id, t.term_name, t.academic_year_id, y.year_name, y.is_active
                 FROM academic_terms t
-                LEFT JOIN academic_years y ON t.academic_year_id = y.id
+                JOIN academic_years y ON t.academic_year_id = y.id
+                WHERE y.id = $1
                 ORDER BY t.id ASC
-            `);
+            `, [activeYearId]);
         }
         res.json(result.rows);
     } catch (err) {
@@ -267,7 +287,16 @@ router.get('/terms/:yearId', async (req, res) => {
         if (isNaN(numericYearId)) {
             return getActiveTermsHandler(req, res);
         }
-        const result = await pool.query("SELECT * FROM academic_terms WHERE academic_year_id = $1 ORDER BY id ASC", [numericYearId]);
+        let result = await pool.query("SELECT * FROM academic_terms WHERE academic_year_id = $1 ORDER BY id ASC", [numericYearId]);
+        if (result.rows.length === 0) {
+            for (const tName of ['First Term', 'Mid Term', 'Final Term']) {
+                await pool.query(
+                    `INSERT INTO academic_terms (academic_year_id, term_name) VALUES ($1, $2)`,
+                    [numericYearId, tName]
+                );
+            }
+            result = await pool.query("SELECT * FROM academic_terms WHERE academic_year_id = $1 ORDER BY id ASC", [numericYearId]);
+        }
         res.json(result.rows);
     } catch (err) {
         console.error(err.message);
@@ -277,7 +306,6 @@ router.get('/terms/:yearId', async (req, res) => {
 
 // Add/Update Terms for a Year
 router.post('/terms', async (req, res) => {
-    // Bug 5 Fix: use a transaction so partial failures don't corrupt terms
     const client = await pool.connect();
     try {
         const { academic_year_id, terms } = req.body;
@@ -286,7 +314,7 @@ router.post('/terms', async (req, res) => {
             return res.status(400).json({ error: "Invalid request data. academic_year_id and terms array are required." });
         }
 
-        // 1. Check if year is completed (outside transaction read-only check)
+        // 1. Check if year exists
         const yearCheck = await client.query("SELECT status FROM academic_years WHERE id = $1", [academic_year_id]);
         if (yearCheck.rows.length === 0) return res.status(404).json({ error: 'Year not found' });
 
@@ -296,17 +324,36 @@ router.post('/terms', async (req, res) => {
 
         await client.query('BEGIN');
 
-        // Delete existing terms for this year
-        await client.query("DELETE FROM academic_terms WHERE academic_year_id = $1", [academic_year_id]);
+        const existingRes = await client.query("SELECT id, term_name FROM academic_terms WHERE academic_year_id = $1", [academic_year_id]);
+        const existingMap = new Map(existingRes.rows.map(r => [(r.term_name || '').trim().toLowerCase(), r.id]));
 
-        // Insert new terms
         const insertedTerms = [];
         for (const term of terms) {
-            const newTerm = await client.query(
-                "INSERT INTO academic_terms (academic_year_id, term_name, has_summer_work, has_winter_work) VALUES ($1, $2, $3, $4) RETURNING *",
-                [academic_year_id, term.term_name, term.has_summer_work || false, term.has_winter_work || false]
-            );
-            insertedTerms.push(newTerm.rows[0]);
+            const key = (term.term_name || '').trim().toLowerCase();
+            if (existingMap.has(key)) {
+                const existingId = existingMap.get(key);
+                const updated = await client.query(
+                    `UPDATE academic_terms 
+                     SET term_name = $1, has_summer_work = $2, has_winter_work = $3
+                     WHERE id = $4 RETURNING *`,
+                    [term.term_name, term.has_summer_work || false, term.has_winter_work || false, existingId]
+                );
+                insertedTerms.push(updated.rows[0]);
+                existingMap.delete(key);
+            } else {
+                const newTerm = await client.query(
+                    "INSERT INTO academic_terms (academic_year_id, term_name, has_summer_work, has_winter_work) VALUES ($1, $2, $3, $4) RETURNING *",
+                    [academic_year_id, term.term_name, term.has_summer_work || false, term.has_winter_work || false]
+                );
+                insertedTerms.push(newTerm.rows[0]);
+            }
+        }
+
+        for (const [_, oldId] of existingMap.entries()) {
+            const refCheck = await client.query("SELECT 1 FROM exam_marks WHERE term_id = $1 LIMIT 1", [oldId]);
+            if (refCheck.rows.length === 0) {
+                await client.query("DELETE FROM academic_terms WHERE id = $1", [oldId]);
+            }
         }
 
         await client.query('COMMIT');

@@ -10,6 +10,7 @@ type SectionItem = { section_id: number; section_name: string; class_id: number 
 type SubjectItem = {
     subject_id: number; subject_name: string; subject_code?: string | null;
     section_id: number; class_id: number; term_id?: number | null;
+    term_name?: string | null;
 };
 
 type TestPaper = {
@@ -82,6 +83,25 @@ export default function TestMarkingPage() {
         if (list.length === 0) {
             list = subjects.filter(s => s.class_id === Number(selClass));
         }
+
+        // Flow [Term -> Class -> Section -> Subject]:
+        // Check if there are term-specific subjects for the selected term
+        if (selTerm) {
+            const currentTerm = terms.find(t => String(t.id) === String(selTerm));
+            const currentTermName = currentTerm ? currentTerm.term_name.trim().toLowerCase() : '';
+
+            const termMatches = list.filter(s => {
+                if (s.term_id && String(s.term_id) === String(selTerm)) return true;
+                const subTermName = (s.term_name || '').trim().toLowerCase();
+                if (currentTermName && subTermName && subTermName === currentTermName) return true;
+                return false;
+            });
+
+            if (termMatches.length > 0) {
+                list = termMatches;
+            }
+        }
+
         const seen = new Set<string>();
         return list.filter(s => {
             const key = (s.subject_name || '').toLowerCase().trim();
@@ -89,7 +109,7 @@ export default function TestMarkingPage() {
             seen.add(key);
             return true;
         });
-    }, [subjects, selClass, selSection]);
+    }, [subjects, selClass, selSection, selTerm, terms]);
 
     const readyToList = !!(selClass && selSection && selSubject && user?.id);
 
@@ -334,7 +354,15 @@ export default function TestMarkingPage() {
                             <label className="form-label fw-semibold text-dark small mb-1">
                                 <span className="badge bg-dark text-white me-1">1</span> Term
                             </label>
-                            <select className="form-select form-select-md border-2" value={selTerm} onChange={e => setSelTerm(e.target.value)} disabled={loadingCtx}>
+                            <select
+                                className="form-select form-select-md border-2"
+                                value={selTerm}
+                                onChange={e => {
+                                    setSelTerm(e.target.value);
+                                    setSelSubject('');
+                                }}
+                                disabled={loadingCtx}
+                            >
                                 <option value="">-- Choose Term --</option>
                                 {terms.map(t => <option key={t.id} value={t.id}>{t.term_name}</option>)}
                             </select>
@@ -344,7 +372,16 @@ export default function TestMarkingPage() {
                             <label className="form-label fw-semibold text-dark small mb-1">
                                 <span className="badge bg-dark text-white me-1">2</span> Class
                             </label>
-                            <select className="form-select form-select-md border-2" value={selClass} onChange={e => setSelClass(e.target.value)} disabled={loadingCtx}>
+                            <select
+                                className="form-select form-select-md border-2"
+                                value={selClass}
+                                onChange={e => {
+                                    setSelClass(e.target.value);
+                                    setSelSection('');
+                                    setSelSubject('');
+                                }}
+                                disabled={!selTerm || loadingCtx}
+                            >
                                 <option value="">-- Choose Class --</option>
                                 {classes.map(c => <option key={c.class_id} value={c.class_id}>{c.class_name}</option>)}
                             </select>
@@ -354,7 +391,15 @@ export default function TestMarkingPage() {
                             <label className="form-label fw-semibold text-dark small mb-1">
                                 <span className="badge bg-dark text-white me-1">3</span> Section
                             </label>
-                            <select className="form-select form-select-md border-2" value={selSection} onChange={e => setSelSection(e.target.value)} disabled={!selClass || loadingCtx}>
+                            <select
+                                className="form-select form-select-md border-2"
+                                value={selSection}
+                                onChange={e => {
+                                    setSelSection(e.target.value);
+                                    setSelSubject('');
+                                }}
+                                disabled={!selClass || loadingCtx}
+                            >
                                 <option value="">-- Choose Section --</option>
                                 {filteredSections.map(s => <option key={s.section_id} value={s.section_id}>{s.section_name}</option>)}
                             </select>
@@ -364,7 +409,12 @@ export default function TestMarkingPage() {
                             <label className="form-label fw-semibold text-dark small mb-1">
                                 <span className="badge bg-dark text-white me-1">4</span> Subject
                             </label>
-                            <select className="form-select form-select-md border-2" value={selSubject} onChange={e => setSelSubject(e.target.value)} disabled={!selSection || loadingCtx}>
+                            <select
+                                className="form-select form-select-md border-2"
+                                value={selSubject}
+                                onChange={e => setSelSubject(e.target.value)}
+                                disabled={!selSection || loadingCtx}
+                            >
                                 <option value="">-- Choose Subject --</option>
                                 {filteredSubjects.map(s => (
                                     <option key={s.subject_id} value={s.subject_id}>
