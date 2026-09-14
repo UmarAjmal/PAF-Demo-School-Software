@@ -977,10 +977,12 @@ export default function CollectFeePage() {
         });
         // After collecting all slips, find the latest unpaid/partial per group
         map.forEach(g => {
-            // For family groups, ensure primary student info reflects the ACTIVE family lead
+            // For family groups, ensure primary student info reflects the ACTIVE family lead (preferring paying students)
             if (g.is_family_slip && g.family_members && g.family_members.length > 0) {
                 const activeMembers = g.family_members.filter((m: any) => (m.status || 'Active').toLowerCase() === 'active');
-                const activeLead = activeMembers.length > 0 ? activeMembers[0] : null;
+                const isTrust = (m: any) => ((m && m.category) || '').trim().toLowerCase() === 'trusted' || m.is_trusted;
+                const activePaying = activeMembers.filter((m: any) => !isTrust(m));
+                const activeLead = activePaying.length > 0 ? activePaying[0] : (activeMembers.length > 0 ? activeMembers[0] : null);
                 if (activeLead) {
                     g.first_name = activeLead.first_name;
                     g.last_name = activeLead.last_name;
@@ -992,11 +994,14 @@ export default function CollectFeePage() {
                 }
             }
 
-            const isTrustedGroup = Boolean(
-                (g.family_members && g.family_members.length > 0 && g.family_members.every((m: any) => (m.category || '').toLowerCase() === 'trusted')) ||
+            const allMembersTrusted = Boolean(
+                g.family_members && g.family_members.length > 0 && g.family_members.every((m: any) => (m.category || '').toLowerCase() === 'trusted' || m.is_trusted)
+            );
+            const isSingleTrusted = Boolean(
                 ((g.latest_slip?.category || '').toLowerCase() === 'trusted') ||
                 ((g.latest_unpaid as any)?.is_trusted)
             );
+            const isTrustedGroup = g.is_family_slip ? allMembersTrusted : isSingleTrusted;
             g.is_trusted = isTrustedGroup;
 
             // Find any slip with a positive unpaid balance
@@ -1653,11 +1658,23 @@ export default function CollectFeePage() {
                                                 <i className="bi bi-people-fill me-1"></i>Students Covered ({activeSlip.family_members!.length})
                                             </div>
                                             <div className="d-flex flex-wrap gap-1">
-                                                {activeSlip.family_members!.map((m, i) => (
-                                                    <span key={i} style={{ fontSize: '0.72rem', backgroundColor: '#fff', color: 'var(--primary-dark)', border: '1px solid #b8dede', borderRadius: 5, padding: '2px 7px' }}>
-                                                        {m.first_name} {m.last_name} <span style={{ color: '#888' }}>({m.class_name})</span>
-                                                    </span>
-                                                ))}
+                                                {activeSlip.family_members!.map((m, i) => {
+                                                    const isTrust = ((m as any).category || '').trim().toLowerCase() === 'trusted' || (m as any).is_trusted;
+                                                    return (
+                                                        <span key={i} style={{
+                                                            fontSize: '0.72rem',
+                                                            backgroundColor: isTrust ? '#f8f9fa' : '#fff',
+                                                            color: isTrust ? '#6c757d' : 'var(--primary-dark)',
+                                                            border: `1px solid ${isTrust ? '#dee2e6' : '#b8dede'}`,
+                                                            borderRadius: 5,
+                                                            padding: '2px 7px',
+                                                            textDecoration: isTrust ? 'line-through' : 'none'
+                                                        }}>
+                                                            {m.first_name} {m.last_name} <span style={{ color: '#888' }}>({m.class_name})</span>
+                                                            {isTrust && <span style={{ textDecoration: 'none', display: 'inline-block', color: '#dc3545', marginLeft: 4, fontWeight: 600 }}>[Trusted]</span>}
+                                                        </span>
+                                                    );
+                                                })}
                                             </div>
                                         </div>
                                     )}

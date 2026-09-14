@@ -1237,6 +1237,7 @@ router.get('/print-queue', async (req, res) => {
                    mfs.is_printed, mfs.printed_at, mfs.is_family_slip, mfs.academic_year_id,
                    ay.year_name AS academic_year_name, COALESCE(ay.is_active, TRUE) AS is_active_year,
                    s.first_name, s.last_name, s.admission_no, s.monthly_fee, s.father_name, s.family_id AS s_family_id,
+                   s.category, s.status AS student_status,
                    sc.class_name, sc.class_id AS c_class_id, sec.section_name,
                    COALESCE(JSON_AGG(
                        JSON_BUILD_OBJECT(
@@ -1261,7 +1262,7 @@ router.get('/print-queue', async (req, res) => {
                      mfs.total_amount, mfs.paid_amount, mfs.status, mfs.due_date, mfs.issue_date,
                      mfs.is_printed, mfs.printed_at, mfs.is_family_slip, mfs.academic_year_id,
                      ay.year_name, ay.is_active,
-                     s.first_name, s.last_name, s.admission_no, s.monthly_fee, s.father_name, s.family_id, s.status,
+                     s.first_name, s.last_name, s.admission_no, s.monthly_fee, s.father_name, s.family_id, s.status, s.category,
                      sc.class_name, sc.class_id, sec.section_name
             ORDER BY s.family_id NULLS LAST, sc.class_id DESC NULLS LAST, s.first_name
         `, params);
@@ -1302,9 +1303,13 @@ router.get('/print-queue', async (req, res) => {
         // Individual vouchers
         for (const slip of soloSlips) {
             const pCount = (slip.family_id ? famPendingMap[slip.family_id] : stuPendingMap[slip.student_id]) || 1;
+            const isTrusted = (slip.category || '').trim().toLowerCase() === 'trusted';
             vouchers.push({
                 voucher_type: 'individual',
-                primary: slip,
+                primary: {
+                    ...slip,
+                    is_trusted: isTrusted
+                },
                 siblings: [],
                 family_id: slip.family_id || null,
                 total_family_amount: parseFloat(slip.total_amount),
@@ -1312,7 +1317,8 @@ router.get('/print-queue', async (req, res) => {
                 is_printed: !!slip.is_printed,
                 slip_ids: [slip.slip_id],
                 family_members: [],
-                pending_months_count: pCount
+                pending_months_count: pCount,
+                is_trusted: isTrusted
             });
         }
 
@@ -1339,9 +1345,41 @@ router.get('/print-queue', async (req, res) => {
             return sA.localeCompare(sB, undefined, { sensitivity: 'base' });
         };
 
-        // Family vouchers primary = student in highest class, then earlier section
+        // Family vouchers primary = student in highest class, then earlier section (prioritizing non-trusted paying students)
         for (const [fid, slips] of Object.entries(familyMap)) {
+            // Fetch all active family members for family vouchers
+            const membersResult = await pool.query(
+                `SELECT s.student_id, s.first_name, s.last_name, s.father_name, s.family_id, s.status, s.category, s.admission_no,
+                        c.class_name, c.class_id, sec.section_name
+                 FROM students s
+                 LEFT JOIN classes c ON s.class_id = c.class_id
+                 LEFT JOIN sections sec ON s.section_id = sec.section_id
+                 WHERE s.family_id = $1 AND s.status = 'Active'`,
+                [fid]
+            );
+
+            const sortedMembers = (membersResult.rows || []).map(m => ({
+                ...m,
+                is_trusted: (m.category || '').trim().toLowerCase() === 'trusted'
+            })).sort((a, b) => {
+                // Non-trusted (paying) students come first
+                const trustA = a.is_trusted ? 1 : 0;
+                const trustB = b.is_trusted ? 1 : 0;
+                if (trustA !== trustB) return trustA - trustB;
+
+                const rankA = getClassRank(a.class_name, a.class_id);
+                const rankB = getClassRank(b.class_name, b.class_id);
+                if (rankA !== rankB) return rankB - rankA;
+                const secComp = compareSections(a.section_name, b.section_name);
+                if (secComp !== 0) return secComp;
+                return (a.first_name || '').localeCompare(b.first_name || '');
+            });
+
             slips.sort((a, b) => {
+                const trustA = (a.category || '').trim().toLowerCase() === 'trusted' ? 1 : 0;
+                const trustB = (b.category || '').trim().toLowerCase() === 'trusted' ? 1 : 0;
+                if (trustA !== trustB) return trustA - trustB;
+
                 const rankA = getClassRank(a.class_name, a.c_class_id || a.class_id);
                 const rankB = getClassRank(b.class_name, b.c_class_id || b.class_id);
                 if (rankA !== rankB) return rankB - rankA;
@@ -1354,46 +1392,39 @@ router.get('/print-queue', async (req, res) => {
             let primary = slips[0];
             const siblings = slips.slice(1);
 
-            // Fetch all active family members for family vouchers so the print shows all students
-            const membersResult = await pool.query(
-                `SELECT s.student_id, s.first_name, s.last_name, s.father_name, s.family_id, s.status,
-                        c.class_name, c.class_id, sec.section_name
-                 FROM students s
-                 LEFT JOIN classes c ON s.class_id = c.class_id
-                 LEFT JOIN sections sec ON s.section_id = sec.section_id
-                 WHERE s.family_id = $1 AND s.status = 'Active'`,
-                [fid]
-            );
+            const allMembersTrusted = sortedMembers.length > 0 && sortedMembers.every(m => m.is_trusted);
+            const activeLeadMember = sortedMembers.find(m => (m.status || 'Active').toLowerCase() === 'active' && !m.is_trusted)
+                || sortedMembers.find(m => (m.status || 'Active').toLowerCase() === 'active')
+                || sortedMembers[0];
 
-            const sortedMembers = (membersResult.rows || []).sort((a, b) => {
-                const rankA = getClassRank(a.class_name, a.class_id);
-                const rankB = getClassRank(b.class_name, b.class_id);
-                if (rankA !== rankB) return rankB - rankA;
-                const secComp = compareSections(a.section_name, b.section_name);
-                if (secComp !== 0) return secComp;
-                return (a.first_name || '').localeCompare(b.first_name || '');
-            });
-
-            const activeLeadMember = sortedMembers.find(m => (m.status || 'Active').toLowerCase() === 'active') || sortedMembers[0];
-            if (activeLeadMember && (primary.student_status || '').toLowerCase() !== 'active') {
-                primary = {
-                    ...primary,
-                    student_id: activeLeadMember.student_id,
-                    first_name: activeLeadMember.first_name,
-                    last_name: activeLeadMember.last_name,
-                    admission_no: activeLeadMember.admission_no || primary.admission_no,
-                    class_name: activeLeadMember.class_name,
-                    c_class_id: activeLeadMember.class_id,
-                    class_id: activeLeadMember.class_id,
-                    section_name: activeLeadMember.section_name || primary.section_name
-                };
+            if (activeLeadMember) {
+                const primaryIsTrusted = (primary.category || '').trim().toLowerCase() === 'trusted';
+                const primaryIsInactive = (primary.student_status || '').toLowerCase() !== 'active';
+                if ((primaryIsTrusted && !allMembersTrusted) || primaryIsInactive) {
+                    primary = {
+                        ...primary,
+                        student_id: activeLeadMember.student_id,
+                        first_name: activeLeadMember.first_name,
+                        last_name: activeLeadMember.last_name,
+                        admission_no: activeLeadMember.admission_no || primary.admission_no,
+                        class_name: activeLeadMember.class_name,
+                        c_class_id: activeLeadMember.class_id,
+                        class_id: activeLeadMember.class_id,
+                        section_name: activeLeadMember.section_name || primary.section_name,
+                        category: activeLeadMember.category,
+                        is_trusted: activeLeadMember.is_trusted
+                    };
+                }
             }
 
             const pCount = famPendingMap[fid] || 1;
             vouchers.push({
                 voucher_type: 'family',
                 family_id: fid,
-                primary,
+                primary: {
+                    ...primary,
+                    is_trusted: allMembersTrusted ? true : ((primary.category || '').trim().toLowerCase() === 'trusted')
+                },
                 siblings,
                 total_family_amount: slips.reduce((s, x) => s + parseFloat(x.total_amount), 0),
                 total_paid: slips.reduce((s, x) => s + parseFloat(x.paid_amount), 0),
@@ -1401,19 +1432,22 @@ router.get('/print-queue', async (req, res) => {
                 partial_printed: slips.some(s => s.is_printed) && !slips.every(s => s.is_printed),
                 slip_ids: slips.map(s => s.slip_id),
                 family_members: sortedMembers,
-                pending_months_count: pCount
+                pending_months_count: pCount,
+                is_all_trusted: allMembersTrusted
             });
         }
 
-        // If class_id filter: show vouchers where primary OR any family member is in this class
+        // If class_id filter: show vouchers where primary OR any printable family member is in this class
         // Track students in this class whose primary is in a DIFFERENT class (cross-class family)
         let filteredVouchers = vouchers;
         let coveredStudents = [];
         if (class_id) {
             filteredVouchers = vouchers.filter(v => {
                 if (v.voucher_type === 'family') {
-                    // Show family voucher in ANY class that has a member
-                    return v.family_members?.some(
+                    // Filter members to printable non-trusted members (unless all members are trusted)
+                    const printable = (v.family_members || []).filter(m => !m.is_trusted);
+                    const membersToCheck = printable.length > 0 ? printable : (v.family_members || []);
+                    return membersToCheck.some(
                         m => m.class_id?.toString() === class_id.toString()
                     ) || v.primary.class_id?.toString() === class_id.toString();
                 }
@@ -1422,7 +1456,8 @@ router.get('/print-queue', async (req, res) => {
             // Covered students: family members in this class whose PRIMARY is in a different class
             for (const v of vouchers) {
                 if (v.voucher_type === 'family' && v.primary.class_id?.toString() !== class_id.toString()) {
-                    const inThisClass = (v.family_members || []).filter(
+                    const printable = (v.family_members || []).filter(m => !m.is_trusted);
+                    const inThisClass = printable.filter(
                         m => m.class_id?.toString() === class_id.toString()
                     );
                     for (const m of inThisClass) {

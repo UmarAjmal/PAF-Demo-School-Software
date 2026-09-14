@@ -882,15 +882,24 @@ function printDailyReceiptWindow(
   };
   const zeroPad = (n: number) => String(n).padStart(5, '0');
 
-  const members: any[] = (slip.family_members && slip.family_members.length > 0)
+  const isTrustedMember = (m: any) => {
+    const cat = ((m && m.category) || '').toString().trim().toLowerCase();
+    return Boolean((m && m.is_trusted) || cat === 'trusted');
+  };
+
+  const rawMembers: any[] = (slip.family_members && slip.family_members.length > 0)
     ? slip.family_members
     : [{
         first_name: slip.first_name,
         last_name: slip.last_name,
         father_name: slip.father_name || '',
         class_name: slip.class_name,
-        section_name: slip.section_name
+        section_name: slip.section_name,
+        category: (slip as any).category,
+        is_trusted: (slip as any).is_trusted
       }];
+  const printableMembers = rawMembers.filter((m: any) => !isTrustedMember(m));
+  const members: any[] = printableMembers.length > 0 ? printableMembers : rawMembers;
 
   const studentRows = members.map((m: any) =>
     `<tr>

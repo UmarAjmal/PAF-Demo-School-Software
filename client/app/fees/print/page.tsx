@@ -12,6 +12,7 @@ interface SlipData {
     is_printed: boolean; printed_at: string;
     first_name: string; last_name: string; admission_no: string; monthly_fee: number; father_name: string;
     class_name: string; c_class_id: number;
+    category?: string; is_trusted?: boolean;
     line_items: { item_id: number; head_name: string; amount: number; note?: string }[];
 }
 interface Voucher {
@@ -19,8 +20,9 @@ interface Voucher {
     primary: SlipData; siblings: SlipData[];
     family_id: string | null; total_family_amount: number; total_paid: number;
     is_printed: boolean; partial_printed?: boolean; slip_ids: number[];
-    family_members?: { student_id: number; first_name: string; last_name: string; father_name: string; class_name: string; class_id: number; section_name?: string }[];
+    family_members?: { student_id: number; first_name: string; last_name: string; admission_no?: string; father_name: string; class_name: string; class_id: number; section_name?: string; category?: string; is_trusted?: boolean; status?: string }[];
     pending_months_count?: number;
+    is_all_trusted?: boolean;
 }
 interface SchoolInfo {
     school_name: string; school_address: string; phone_number: string;
@@ -41,6 +43,11 @@ function VoucherSlip({ v, serial, month, year, school, filterClassId }: { v: Vou
     const dueDate = v.primary.due_date ? fmtDate(v.primary.due_date) : '--';
     const issueDate = v.primary.issue_date ? fmtDate(v.primary.issue_date) : fmtDate(new Date());
 
+    const isTrustedMember = (m: any) => {
+        const cat = ((m && m.category) || '').toString().trim().toLowerCase();
+        return Boolean((m && m.is_trusted) || cat === 'trusted');
+    };
+
     const allStudents: SlipData[] = [v.primary, ...v.siblings];
 
     let membersSource = v.family_members && v.family_members.length > 0
@@ -51,18 +58,25 @@ function VoucherSlip({ v, serial, month, year, school, filterClassId }: { v: Vou
             father_name: s.father_name,
             class_name: s.class_name,
             section_name: (s as any).section_name,
-            class_id: s.c_class_id
+            class_id: s.c_class_id,
+            category: s.category,
+            is_trusted: (s as any).is_trusted
         }));
 
+    // Exclude Trusted students from printing on the voucher
+    const nonTrustedMembers = membersSource.filter(m => !isTrustedMember(m));
+    // If all members in the family are Trusted, keep membersSource so voucher isn't blank
+    const printableMembers = nonTrustedMembers.length > 0 ? nonTrustedMembers : membersSource;
+
     if (filterClassId && v.voucher_type === 'family') {
-        membersSource.sort((a, b) => {
+        printableMembers.sort((a, b) => {
             const aMatch = (a as any).class_id?.toString() === filterClassId ? 0 : 1;
             const bMatch = (b as any).class_id?.toString() === filterClassId ? 0 : 1;
             return aMatch - bMatch;
         });
     }
 
-    const rawStudentRows = membersSource.map(m => ({
+    const rawStudentRows = printableMembers.map(m => ({
         name: `${m.first_name || ''} ${m.last_name || ''}`.trim(),
         father: m.father_name || '',
         cls: `${m.class_name || ''}${(m as any).section_name ? ` (${(m as any).section_name})` : ''}`
@@ -105,10 +119,12 @@ function VoucherSlip({ v, serial, month, year, school, filterClassId }: { v: Vou
         itemMap.set(desc, (itemMap.get(desc) || 0) + amt);
     }
 
+    const isAllMembersTrusted = Boolean(
+        v.family_members && v.family_members.length > 0 && v.family_members.every(m => isTrustedMember(m))
+    );
     const isTrustedVoucher = Boolean(
-        (v.primary as any).is_trusted ||
-        ((v.primary as any).category && (v.primary as any).category.trim().toLowerCase() === 'trusted') ||
-        (v.family_members && v.family_members.length > 0 && v.family_members.every((m: any) => (m.category || '').toLowerCase() === 'trusted'))
+        (v as any).is_all_trusted ||
+        (v.voucher_type === 'individual' ? isTrustedMember(v.primary) : isAllMembersTrusted)
     );
 
     itemMap.forEach((amt, desc) => {
@@ -258,13 +274,21 @@ function VoucherCard({ v, idx, selected, onToggle, filterClassId }: { v: Voucher
     const remaining = parseFloat(v.total_family_amount as any) - parseFloat(v.total_paid as any);
     const isFam = v.voucher_type === 'family';
 
+    const isTrustedMember = (m: any) => {
+        const cat = ((m && m.category) || '').toString().trim().toLowerCase();
+        return Boolean((m && m.is_trusted) || cat === 'trusted');
+    };
+
     const allMembers = (v.family_members && v.family_members.length > 0)
         ? v.family_members
         : [v.primary, ...v.siblings];
 
-    const displayPrimary = (filterClassId && isFam && v.family_members && v.family_members.length > 0)
-        ? (v.family_members.find(m => m.class_id?.toString() === filterClassId) || v.primary)
-        : v.primary;
+    const nonTrustedMembers = allMembers.filter(m => !isTrustedMember(m));
+    const printableMembers = nonTrustedMembers.length > 0 ? nonTrustedMembers : allMembers;
+
+    const displayPrimary = (filterClassId && isFam && printableMembers.length > 0)
+        ? (printableMembers.find(m => m.class_id?.toString() === filterClassId) || printableMembers[0] || v.primary)
+        : (printableMembers[0] || v.primary);
 
     return (
         <div className={`card border-0 shadow-sm mb-2${selected ? ' border border-primary' : ''}`}
@@ -280,7 +304,7 @@ function VoucherCard({ v, idx, selected, onToggle, filterClassId }: { v: Voucher
                                 <span className="fw-bold text-dark me-2">{displayPrimary.first_name} {displayPrimary.last_name}</span>
                                 <span className="badge rounded-pill bg-light text-dark border me-1">{(displayPrimary as any).class_name || v.primary.class_name}</span>
                                 {isFam && <span className="badge rounded-pill me-1" style={{ backgroundColor: '#215E61', color: '#fff' }}>
-                                    <i className="bi bi-people-fill me-1"></i>Family ({allMembers.length})
+                                    <i className="bi bi-people-fill me-1"></i>Family ({printableMembers.length}{nonTrustedMembers.length !== allMembers.length ? `/${allMembers.length}` : ''})
                                 </span>}
                                 {v.is_printed && <span className="badge bg-success rounded-pill"><i className="bi bi-printer-fill me-1"></i>Printed</span>}
                                 {v.partial_printed && <span className="badge bg-warning text-dark rounded-pill">Partial</span>}
@@ -292,15 +316,24 @@ function VoucherCard({ v, idx, selected, onToggle, filterClassId }: { v: Voucher
                         </div>
                         {isFam && allMembers.length > 0 && (
                             <div className="d-flex flex-wrap gap-1 mt-1">
-                                {allMembers.map((m, i) => (
-                                    <span key={i} className="badge bg-light text-dark border" style={{ fontSize: '0.7rem' }}>
-                                        {m.first_name} {m.last_name} ({(m as any).class_name || (m as any).c_class_name})
-                                    </span>
-                                ))}
+                                {allMembers.map((m, i) => {
+                                    const trusted = isTrustedMember(m);
+                                    return (
+                                        <span
+                                            key={i}
+                                            className={`badge ${trusted ? 'bg-light text-muted border' : 'bg-light text-dark border'}`}
+                                            style={{ fontSize: '0.7rem', textDecoration: trusted ? 'line-through' : 'none' }}
+                                            title={trusted ? 'Trusted Category (Not printed on voucher)' : undefined}
+                                        >
+                                            {m.first_name} {m.last_name} ({(m as any).class_name || (m as any).c_class_name})
+                                            {trusted && <span className="ms-1 text-danger font-monospace" style={{ textDecoration: 'none', display: 'inline-block' }}>[Trusted]</span>}
+                                        </span>
+                                    );
+                                })}
                             </div>
                         )}
                         <div className="text-muted" style={{ fontSize: '0.72rem' }}>
-                            Adm: {v.primary.admission_no}
+                            Adm: {displayPrimary.admission_no || v.primary.admission_no}
                             {v.primary.printed_at && <span className="ms-2">Printed: {new Date(v.primary.printed_at).toLocaleDateString('en-PK')}</span>}
                         </div>
                     </div>
@@ -1019,22 +1052,29 @@ export default function PrintSlipsPage() {
                                     </ul>
                                 </div>
                             </div>
-                            {coveredStudents.length > 0 && (
-                                <div className="card border-0 shadow-sm">
-                                    <div className="card-header bg-warning bg-opacity-10 border-bottom py-2">
-                                        <h6 className="mb-0 fw-bold small text-warning"><i className="bi bi-arrow-right-circle me-2"></i>In Sibling Voucher ({coveredStudents.length})</h6>
+                            {(() => {
+                                const visibleCovered = coveredStudents.filter(s => {
+                                    const cat = ((s && s.category) || '').toString().trim().toLowerCase();
+                                    return !s.is_trusted && cat !== 'trusted';
+                                });
+                                if (visibleCovered.length === 0) return null;
+                                return (
+                                    <div className="card border-0 shadow-sm">
+                                        <div className="card-header bg-warning bg-opacity-10 border-bottom py-2">
+                                            <h6 className="mb-0 fw-bold small text-warning"><i className="bi bi-arrow-right-circle me-2"></i>In Sibling Voucher ({visibleCovered.length})</h6>
+                                        </div>
+                                        <div className="card-body p-3">
+                                            {visibleCovered.map((s, i) => (
+                                                <div key={i} className="border rounded p-2 mb-2 bg-light small">
+                                                    <div className="fw-bold">{s.first_name} {s.last_name}</div>
+                                                    <div className="text-muted" style={{ fontSize: '0.72rem' }}>{s.class_name} · {s.admission_no}</div>
+                                                    <div className="text-muted" style={{ fontSize: '0.72rem' }}>Included in: <b>{s.covered_by?.first_name} {s.covered_by?.last_name}</b></div>
+                                                </div>
+                                            ))}
+                                        </div>
                                     </div>
-                                    <div className="card-body p-3">
-                                        {coveredStudents.map((s, i) => (
-                                            <div key={i} className="border rounded p-2 mb-2 bg-light small">
-                                                <div className="fw-bold">{s.first_name} {s.last_name}</div>
-                                                <div className="text-muted" style={{ fontSize: '0.72rem' }}>{s.class_name} · {s.admission_no}</div>
-                                                <div className="text-muted" style={{ fontSize: '0.72rem' }}>Included in: <b>{s.covered_by?.first_name} {s.covered_by?.last_name}</b></div>
-                                            </div>
-                                        ))}
-                                    </div>
-                                </div>
-                            )}
+                                );
+                            })()}
                         </div>
                     </div>
                 )}
