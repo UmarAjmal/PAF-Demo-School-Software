@@ -34,144 +34,6 @@ function fmtDate(d: string | Date | null) {
 }
 function zeroPad(n: number, digits = 6) { return String(n).padStart(digits, '0'); }
 
-/* ============================================================================
-   PREVIOUS VOUCHER DESIGN (PRESERVED IN COMMENTS)
-   ============================================================================
-function OldVoucherSlip({ v, serial, month, year, school, filterClassId }: { v: Voucher; serial: number; month: string; year: string; school: SchoolInfo; filterClassId?: string }) {
-    const mIdx = parseInt(month) - 1;
-    const monthName = MONTHS[mIdx] || '';
-    const voucherNo = `${MONTH_SHORT[mIdx] || 'FEE'}${zeroPad(serial)}`;
-    const dueDate = v.primary.due_date ? fmtDate(v.primary.due_date) : '--';
-    const allStudents: SlipData[] = [v.primary, ...v.siblings];
-
-    const feeRows: { sr: number; desc: string; amount: number }[] = [];
-    let sr = 1;
-    for (const item of (v.primary.line_items || [])) {
-        let displayName = item.head_name.replace('Family Monthly Fee', 'Monthly Fee');
-        const isPb = displayName.toLowerCase().includes('previous balance') || displayName.toLowerCase().includes('opening balance');
-        const rowDesc = isPb 
-            ? displayName 
-            : (displayName.includes('(') ? displayName : `${displayName} (${monthName})`);
-        feeRows.push({ sr: sr++, desc: rowDesc, amount: parseFloat(item.amount as any) });
-    }
-    const totalPaid = parseFloat(v.total_paid as any) || 0;
-    if (totalPaid > 0) feeRows.push({ sr: sr++, desc: 'Amount Already Paid', amount: -totalPaid });
-    const grandTotal = parseFloat(v.total_family_amount as any) - totalPaid;
-
-    type StudentRow = { first_name: string; last_name: string; father_name?: string; class_name?: string; section_name?: string } | null;
-    let membersSource = v.family_members && v.family_members.length > 0
-        ? [...v.family_members]
-        : allStudents.map(s => ({ ...s, class_id: s.c_class_id }));
-    if (filterClassId && v.voucher_type === 'family') {
-        membersSource.sort((a, b) => {
-            const aMatch = (a as any).class_id?.toString() === filterClassId ? 0 : 1;
-            const bMatch = (b as any).class_id?.toString() === filterClassId ? 0 : 1;
-            return aMatch - bMatch;
-        });
-    }
-    const baseStudents: StudentRow[] = membersSource.map(m => ({
-        first_name: m.first_name,
-        last_name: m.last_name,
-        father_name: (m as any).father_name,
-        class_name: (m as any).class_name,
-        section_name: (m as any).section_name
-    }));
-    const studentRows: StudentRow[] = [...baseStudents];
-    while (studentRows.length < 9) studentRows.push(null);
-
-    const td = (extra?: React.CSSProperties): React.CSSProperties => ({ border: '1px solid #000', padding: '0.5mm 1mm', lineHeight: 1, ...extra });
-    const th = (extra?: React.CSSProperties): React.CSSProperties => ({ border: '1px solid #000', padding: '0.5mm 1mm', fontWeight: 'bold', backgroundColor: '#f0f0f0', ...extra });
-
-    return (
-        <div style={{ width: '91mm', height: '185mm', border: '1px solid #000', padding: '4mm 5mm', display: 'flex', flexDirection: 'column', boxSizing: 'border-box', flexShrink: 0, fontFamily: 'Arial, sans-serif', overflow: 'hidden', background: '#fff' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '2mm' }}>
-                {school.school_logo_url
-                    ? <img src={school.school_logo_url} alt="logo" style={{ width: '20mm', height: '20mm', objectFit: 'contain', marginRight: '3mm', flexShrink: 0 }} />
-                    : <div style={{ width: '20mm', height: '20mm', backgroundColor: '#007bff', marginRight: '3mm', flexShrink: 0 }} />}
-                <div style={{ fontSize: '11pt', fontWeight: 'bold', textTransform: 'uppercase', textAlign: 'center', lineHeight: 1.2, color: '#000' }}>{school.school_name}</div>
-            </div>
-            <div style={{ fontSize: '9pt', textAlign: 'center', width: '100%' }}>{school.school_address}</div>
-            <div style={{ fontSize: '9pt', textAlign: 'center', marginTop: '1mm', marginBottom: '2mm', whiteSpace: 'nowrap' }}>
-                {[school.phone_number, school.school_phone2, school.school_phone3].filter(Boolean).join(' ; ')}
-            </div>
-            <div style={{ borderTop: '1px solid #000', margin: '1mm 0' }} />
-            <div style={{ fontSize: '11pt', fontWeight: 'bold', textTransform: 'uppercase', textAlign: 'center', margin: '1mm 0' }}>Monthly Fee Voucher</div>
-            <div style={{ borderTop: '1px solid #000', margin: '1mm 0' }} />
-            <div style={{ fontSize: '9pt', marginTop: '1mm', whiteSpace: 'nowrap' }}>
-                Voucher No: <span style={{ fontSize: '10pt', fontWeight: 'bold', textDecoration: 'underline' }}>{voucherNo}</span>
-                &nbsp;&nbsp;
-                Family ID: <span style={{ fontSize: '10pt', fontWeight: 'bold', textDecoration: 'underline' }}>{v.family_id || '—'}</span>
-            </div>
-            <div style={{ fontSize: '8.5pt', marginTop: '1mm', marginBottom: '1.5mm', whiteSpace: 'nowrap' }}>
-                Issue date: <span style={{ fontWeight: 'bold', textDecoration: 'underline' }}>{v.primary.issue_date ? fmtDate(v.primary.issue_date) : fmtDate(new Date())}</span>
-                &nbsp;&nbsp;
-                Due date: <span style={{ fontWeight: 'bold', textDecoration: 'underline' }}>{dueDate}</span>
-            </div>
-            <div style={{ fontSize: '9pt', fontWeight: 'bold', marginTop: '1mm', marginBottom: '0.5mm' }}>Students Details</div>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '7.5pt' }}>
-                <thead>
-                    <tr>
-                        <th style={th({ textAlign: 'center', width: '37%' })}>Student Name</th>
-                        <th style={th({ textAlign: 'center', width: '37%' })}>Father Name</th>
-                        <th style={th({ textAlign: 'center', width: '26%' })}>Class (Sec)</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {studentRows.map((s, i) => (
-                        <tr key={i}>
-                            <td style={td()}>{s ? `${s.first_name} ${s.last_name}` : '\u00A0'}</td>
-                            <td style={td()}>{s?.father_name || '\u00A0'}</td>
-                            <td style={td({ textAlign: 'center' })}>{s ? `${s.class_name}${s.section_name ? ` (${s.section_name})` : ''}` : '\u00A0'}</td>
-                        </tr>
-                    ))}
-                </tbody>
-            </table>
-            <div style={{ fontSize: '9pt', fontWeight: 'bold', marginTop: '1.5mm', marginBottom: '0.5mm' }}>Fee Details</div>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '7.5pt' }}>
-                <thead>
-                    <tr>
-                        <th style={th({ textAlign: 'center', width: '9%' })}>Sr.#</th>
-                        <th style={th({ textAlign: 'left', width: '65%' })}>Fee Description</th>
-                        <th style={th({ textAlign: 'center', width: '26%' })}>Amount</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {feeRows.map((row, i) => (
-                        <tr key={i} style={row.amount < 0 ? { fontStyle: 'italic' } : {}}>
-                            <td style={td({ textAlign: 'center' })}>{row.sr}</td>
-                            <td style={td({ textAlign: 'left' })}>{row.desc}</td>
-                            <td style={td({ textAlign: 'center' })}>{row.amount < 0 ? `-${fmtAmt(Math.abs(row.amount))}` : fmtAmt(row.amount)}</td>
-                        </tr>
-                    ))}
-                    <tr style={{ fontWeight: 'bold' }}>
-                        <td style={td({ textAlign: 'center' })}>{sr}</td>
-                        <td style={td({ textAlign: 'center', fontWeight: 'bold' })}>Total Amount</td>
-                        <td style={td({ textAlign: 'center', fontWeight: 'bold' })}>{fmtAmt(grandTotal)}</td>
-                    </tr>
-                </tbody>
-            </table>
-            <div style={{ marginTop: '2mm', fontSize: '7.5pt' }}>
-                <ul style={{ paddingLeft: '10pt', margin: 0 }}>
-                    <li style={{ marginBottom: '1mm' }}>Please bring this voucher when you pay your fee.</li>
-                    <li style={{ marginBottom: '1mm' }}>All fees must be paid at the school office only.</li>
-                    <li style={{ marginBottom: '1mm' }}>After payment, collect your receipt.</li>
-                    <li>For any fee issues, contact the school office.</li>
-                </ul>
-            </div>
-        </div>
-    );
-}
-   ============================================================================ */
-
-/* ============================================================================
-   NEW MONTHLY FEE VOUCHER DESIGN (Strictly matching monthly fee voucher.html)
-   ============================================================================ */
-
-const MIN_STUDENTS = 4;   // always show at least 4 student rows
-const MAX_STUDENTS = 9;   // extend beyond 4 up to 9 as students are added
-const MIN_FEES = 2;       // always show Monthly Fee + Previous Dues
-const MAX_FEES = 4;       // extend beyond base when extra fee-heads are added
-
 function VoucherSlip({ v, serial, month, year, school, filterClassId }: { v: Voucher; serial: number; month: string; year: string; school: SchoolInfo; filterClassId?: string }) {
     const mIdx = parseInt(month) - 1;
     const monthName = MONTHS[mIdx] || '';
@@ -204,12 +66,9 @@ function VoucherSlip({ v, serial, month, year, school, filterClassId }: { v: Vou
         name: `${m.first_name || ''} ${m.last_name || ''}`.trim(),
         father: m.father_name || '',
         cls: `${m.class_name || ''}${(m as any).section_name ? ` (${(m as any).section_name})` : ''}`
-    })).slice(0, MAX_STUDENTS);
+    }));
 
-    const studentRows = [...rawStudentRows];
-    while (studentRows.length < MIN_STUDENTS) {
-        studentRows.push({ name: '', father: '', cls: '' });
-    }
+    const studentRows = rawStudentRows.length > 0 ? rawStudentRows.slice(0, 4) : [{ name: '', father: '', cls: '' }];
 
     const regularFeeItems: { desc: string; amount: number }[] = [];
     let lateFineAmount = 0;
@@ -225,7 +84,7 @@ function VoucherSlip({ v, serial, month, year, school, filterClassId }: { v: Vou
         if (isFine) {
             lateFineAmount += amt;
             if ((item as any).fine_after_day) fineAfterDay = (item as any).fine_after_day;
-            continue; // Exclude late fine from regular total
+            continue;
         }
 
         const displayName = rawName.replace(/Family Monthly Fee/i, 'Monthly Fee');
@@ -273,12 +132,11 @@ function VoucherSlip({ v, serial, month, year, school, filterClassId }: { v: Vou
         regularFeeItems.push({ desc: 'Amount Already Paid', amount: -totalPaid });
     }
 
-    const maxSlots = lateFineAmount > 0 ? 3 : MAX_FEES;
-    const feeRows = regularFeeItems.slice(0, maxSlots);
-    while (feeRows.length < (lateFineAmount > 0 ? 2 : MIN_FEES)) {
-        feeRows.push({ desc: '', amount: 0 });
+    if (regularFeeItems.length === 0) {
+        regularFeeItems.push({ desc: 'Monthly Fee', amount: parseFloat(v.total_family_amount as any) || 0 });
     }
 
+    const feeRows = regularFeeItems.slice(0, 4);
     const totalAmountWithinDueDate = regularFeeItems.reduce((sum, f) => sum + (f.amount || 0), 0);
     const totalAmountAfterDueDate = totalAmountWithinDueDate + lateFineAmount;
 
@@ -290,23 +148,18 @@ function VoucherSlip({ v, serial, month, year, school, filterClassId }: { v: Vou
 
     const pendingMonths = v.pending_months_count || (v.primary as any).pending_months_count || 1;
 
-    const studentCount = Math.max(MIN_STUDENTS, Math.min(rawStudentRows.length, MAX_STUDENTS));
-    const feeCount = Math.max(MIN_FEES, Math.min(feeRows.length, MAX_FEES));
-    const extraRows = (studentCount - MIN_STUDENTS) + (feeCount - MIN_FEES) + (lateFineAmount > 0 ? 2 : 0) + (pendingMonths >= 2 ? 1 : 0);
-    const compactClass = extraRows >= 2 ? ' table-compact' : '';
-
-    const schoolName = school.school_name || 'Falcon School System';
+    const schoolName = school.school_name || 'Shaheen English Model School Vehari';
     const schoolAddress = school.school_address || '83/M Madina Colony Vehari';
     const schoolPhones = [school.phone_number, school.school_phone2, school.school_phone3].filter(Boolean).join(' ; ') || '0300-7730141 ; 0308-7696430 ; 067-3366383';
 
     return (
-        <div className={`voucher${compactClass}`}>
+        <div className="voucher">
             <div className="voucher-header">
-                {school.school_logo_url ? (
-                    <img src={school.school_logo_url} alt="Logo" className="logo-placeholder" style={{ objectFit: 'contain' }} />
-                ) : (
-                    <div className="logo-placeholder"></div>
-                )}
+                <div className="logo-placeholder">
+                    {school.school_logo_url ? (
+                        <img src={school.school_logo_url} alt="Logo" />
+                    ) : null}
+                </div>
                 <div className="school-name">{schoolName}</div>
             </div>
             <div className="school-address">{schoolAddress}</div>
@@ -323,7 +176,7 @@ function VoucherSlip({ v, serial, month, year, school, filterClassId }: { v: Vou
                 <span className="detail-group">Due date: <span className="date-value">{dueDate}</span></span>
             </div>
             <div className="voucher-body">
-                <div className="student-details">Students Details</div>
+                <div className="student-details">Student Details</div>
                 <table className="students-table">
                     <thead>
                         <tr>
@@ -355,46 +208,38 @@ function VoucherSlip({ v, serial, month, year, school, filterClassId }: { v: Vou
                     <tbody>
                         {feeRows.map((f, i) => (
                             <tr key={i}>
-                                <td>{f.desc ? i + 1 : '\u00A0'}</td>
+                                <td>{i + 1}</td>
                                 <td>{f.desc || '\u00A0'}</td>
-                                <td>{f.desc ? fmtAmt(f.amount) : '0/-'}</td>
+                                <td>{fmtAmt(f.amount)}</td>
                             </tr>
                         ))}
                         <tr className="total-row">
-                            <td>{feeRows.filter(r => r.desc).length + 1}</td>
+                            <td>{feeRows.length + 1}</td>
                             <td>Total Amount</td>
                             <td>{fmtAmt(totalAmountWithinDueDate)}</td>
                         </tr>
-                        {lateFineAmount > 0 && (
-                            <>
-                                <tr style={{ backgroundColor: '#fff', fontSize: '9.5pt' }}>
-                                    <td>-</td>
-                                    <td style={{ fontStyle: 'italic', color: '#444' }}>Late Fee Fine (After {fineCutoffDateStr})</td>
-                                    <td style={{ fontStyle: 'italic', color: '#444' }}>{fmtAmt(lateFineAmount)}</td>
-                                </tr>
-                                <tr className="total-row" style={{ backgroundColor: '#f2f2f2' }}>
-                                    <td>-</td>
-                                    <td>Total Payable (After {fineCutoffDateStr})</td>
-                                    <td>{fmtAmt(totalAmountAfterDueDate)}</td>
-                                </tr>
-                            </>
-                        )}
                     </tbody>
                 </table>
 
-                {pendingMonths >= 2 && (
-                    <div className="defaulter-warning-box">
-                        <strong> تنبیہ:⚠️</strong> محترم والدین! آپ کی فیس پچھلے <strong>{pendingMonths} ماہ</strong> سے واجب الادا ہے۔ برائے مہربانی اسے فوری جمع کروائیں، بصورت دیگر سکول پالیسی کے مطابق سٹرک آف  نوٹس جاری کیا جا سکتا ہے۔
+                <div className="rules-section">
+                    <div className="rules-box">
+                        <span className="rule-line">1. Fee must be paid before the due date.</span>
+                        <span className="rule-line">2. A fine/late fee will apply after {fineCutoffDateStr !== '--' ? fineCutoffDateStr : 'the due date'}.</span>
+                        <span className="rule-line">3. Fee must be deposited only at school-designated bank/counter.</span>
+                        <span className="rule-line">4. Fee once paid is non-refundable under any circumstances.</span>
                     </div>
-                )}
-
-                <div className="rules-box">
-                    <span className="rule-line">1. Fee must be paid before the due date.</span>
-                    <span className="rule-line">2. A fine/late fee will apply after {fineCutoffDateStr !== '--' ? fineCutoffDateStr : 'the due date'}.</span>
-                    <span className="rule-line">3. Fee must be deposited only at the school-designated bank/counter.</span>
-                    <span className="rule-line">4. Fee once paid is non-refundable under any circumstances.</span>
+                    <div className="software-instructions">
+                        <span className="instructions-label">Software Instructions:</span>
+                        <div>• Retain slip copy for computerized fee verification.</div>
+                        {pendingMonths >= 2 && (
+                            <div>• Notice: Previous {pendingMonths} months dues pending. Please deposit dues immediately.</div>
+                        )}
+                        {lateFineAmount > 0 && (
+                            <div>• Late fine of {fmtAmt(lateFineAmount)} applicable post {fineCutoffDateStr} (Total: {fmtAmt(totalAmountAfterDueDate)}).</div>
+                        )}
+                    </div>
+                    <div className="developer-credit">Software designed and developed by FALCON SWIFT PVT. LTD. webiste: www.falconswift.online contact 03208624173, 03263392082</div>
                 </div>
-                <div className="filler"></div>
             </div>
         </div>
     );
@@ -623,7 +468,7 @@ export default function PrintSlipsPage() {
     const selectedVouchers = Array.from(selected).sort((a, b) => a - b).map(i => vouchers[i]).filter(Boolean);
     const allSlipIds = selectedVouchers.flatMap(v => v.slip_ids);
     const pages: Voucher[][] = [];
-    for (let i = 0; i < selectedVouchers.length; i += 3) pages.push(selectedVouchers.slice(i, i + 3));
+    for (let i = 0; i < selectedVouchers.length; i += 4) pages.push(selectedVouchers.slice(i, i + 4));
     const voucherSerials = new Map<number, number>();
     vouchers.forEach((v, i) => { voucherSerials.set(v.slip_ids[0], i + 1); });
     const getSerial = (v: Voucher) => voucherSerials.get(v.slip_ids[0]) || 1;
@@ -679,41 +524,84 @@ export default function PrintSlipsPage() {
     };
 
     const printStyles = `
-        @media print {
-            @page { size: A4 landscape; margin: 0; }
-            .sl-sidebar, .sl-topbar, .sl-overlay, .sl-toggle { display: none !important; }
-            .sl-layout { display: block !important; overflow: visible !important; height: auto !important; }
-            .sl-main { margin-left: 0 !important; padding: 0 !important; width: 297mm !important; max-width: 297mm !important; overflow: visible !important; max-height: unset !important; height: auto !important; min-height: 0 !important; }
-            .fee-print-page { height: 210mm !important; overflow: hidden !important; }
-            body, html { margin: 0 !important; padding: 0 !important; background: #fff !important; overflow: visible !important; font-family: 'Times New Roman', Times, serif; color: #000; }
-            * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        @page {
+            size: A4 portrait;
+            margin: 0;
         }
-
-        .fee-print-page {
-            display: flex;
-            justify-content: space-between;
-            align-items: flex-start;
-            gap: 0.5mm;
-            width: 297mm;
-            height: 210mm;
-            padding: 8mm;
+        * {
             box-sizing: border-box;
-            background: #fff;
-            color: #000;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+        }
+        html, body {
+            margin: 0 !important;
+            padding: 0 !important;
+            width: 210mm;
+            height: 297mm;
             font-family: 'Times New Roman', Times, serif;
+            color: #000;
+            background: #fff;
+        }
+        body {
+            padding: 5mm 6mm !important;
         }
 
-        .cut-separator {
-            position: relative;
-            width: 0;
-            align-self: stretch;
-            border-left: 1.2pt dashed #555;
-            margin: 0 1mm;
+        @media print {
+            .sl-sidebar, .sl-topbar, .sl-overlay, .sl-toggle, .no-print { display: none !important; }
+            .sl-layout { display: block !important; overflow: visible !important; height: auto !important; }
+            .sl-main { margin-left: 0 !important; padding: 0 !important; width: 210mm !important; max-width: 210mm !important; overflow: visible !important; max-height: unset !important; height: auto !important; min-height: 0 !important; }
+            body, html { margin: 0 !important; padding: 5mm 6mm !important; width: 210mm !important; height: 297mm !important; background: #fff !important; overflow: visible !important; font-family: 'Times New Roman', Times, serif; color: #000; }
+            .page-container {
+                page-break-after: always;
+                break-after: page;
+            }
+            .page-container:last-child {
+                page-break-after: auto;
+                break-after: auto;
+            }
         }
-        .cut-separator::before {
+
+        /* Outer wrapper for 4 vouchers on A4 Portrait page */
+        .page-container {
+            position: relative;
+            width: 198mm;
+            height: 287mm;
+            display: grid;
+            grid-template-columns: 96mm 96mm;
+            grid-template-rows: 138mm 138mm;
+            gap: 11mm 6mm;
+            box-sizing: border-box;
+            margin: 0 auto;
+            page-break-inside: avoid;
+            break-inside: avoid;
+        }
+
+        /* Cut separators between 4 vouchers */
+        .cut-line-v {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            left: 99mm;
+            width: 0;
+            border-left: 1.2pt dashed #555;
+            transform: translateX(-50%);
+            pointer-events: none;
+        }
+        .cut-line-v::before {
             content: "\\2702";
             position: absolute;
-            top: -4.2mm;
+            top: -3.5mm;
+            left: 50%;
+            transform: translateX(-50%) rotate(90deg);
+            font-size: 8pt;
+            color: #555;
+            background: #fff;
+            padding: 0 0.5mm;
+        }
+        .cut-line-v::after {
+            content: "\\2702";
+            position: absolute;
+            bottom: -3.5mm;
             left: 50%;
             transform: translateX(-50%) rotate(90deg);
             font-size: 8pt;
@@ -722,13 +610,47 @@ export default function PrintSlipsPage() {
             padding: 0 0.5mm;
         }
 
+        .cut-line-h {
+            position: absolute;
+            left: 0;
+            right: 0;
+            top: 143.5mm;
+            height: 0;
+            border-top: 1.2pt dashed #555;
+            transform: translateY(-50%);
+            pointer-events: none;
+        }
+        .cut-line-h::before {
+            content: "\\2702";
+            position: absolute;
+            left: -4mm;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: 8pt;
+            color: #555;
+            background: #fff;
+            padding: 0.5mm 0;
+        }
+        .cut-line-h::after {
+            content: "\\2702";
+            position: absolute;
+            right: -4mm;
+            top: 50%;
+            transform: translateY(-50%) rotate(180deg);
+            font-size: 8pt;
+            color: #555;
+            background: #fff;
+            padding: 0.5mm 0;
+        }
+
+        /* Fixed Voucher card frame */
         .voucher {
-            width: 92mm;
-            height: 190mm;
+            width: 96mm;
+            height: 138mm;
             border: 1.5pt solid #000;
             outline: 0.5pt solid #000;
-            outline-offset: 1.5pt;
-            padding: 4mm 4mm;
+            outline-offset: 1.2pt;
+            padding: 2.5mm 3mm 1.5mm 3mm;
             display: flex;
             flex-direction: column;
             box-sizing: border-box;
@@ -739,76 +661,83 @@ export default function PrintSlipsPage() {
             color: #000;
             font-family: 'Times New Roman', Times, serif;
         }
+
         .voucher-header {
             display: flex;
             align-items: center;
-            gap: 3mm;
+            gap: 2mm;
             flex: 0 0 auto;
         }
         .logo-placeholder {
-            width: 24mm;
-            height: 20mm;
+            width: 14mm;
+            height: 12mm;
             flex: 0 0 auto;
             border: none;
             background: transparent;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+        .logo-placeholder img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            display: block;
         }
         .school-name {
             flex: 1 1 auto;
-            font-size: 12.5pt;
+            font-size: 11pt;
             font-weight: bold;
             text-transform: uppercase;
             line-height: 1.15;
             text-align: left;
         }
         .school-address, .school-contact {
-            font-size: 9.5pt;
+            font-size: 8.5pt;
             text-align: center;
             width: 100%;
             flex: 0 0 auto;
+            line-height: 1.15;
         }
-        .school-address { margin-top: 1mm; }
-        .school-contact { margin-top: 0.5mm; white-space: nowrap; }
-        .divider { width: 100%; border-top: 1pt solid #000; margin: 1mm 0; flex: 0 0 auto; }
+        .school-address { margin-top: 0.4mm; }
+        .school-contact { margin-top: 0.2mm; white-space: nowrap; }
+
+        .divider {
+            width: 100%;
+            border-top: 0.9pt solid #000;
+            margin: 0.5mm 0;
+            flex: 0 0 auto;
+        }
+
         .voucher-type {
-            font-size: 12.5pt;
+            font-size: 10.5pt;
             font-weight: bold;
             text-transform: uppercase;
             text-align: center;
-            margin: 0.3mm 0;
+            margin: 0.2mm 0;
             flex: 0 0 auto;
         }
-        .voucher-details {
-            font-size: 10.5pt;
-            margin-top: 1mm;
+
+        .voucher-details, .voucher-date-line {
+            font-size: 8.8pt;
             white-space: nowrap;
-            display: grid;
-            grid-template-columns: 1fr 1fr;
+            display: flex;
+            justify-content: space-between;
             flex: 0 0 auto;
         }
-        .voucher-details .detail-group:first-child { text-align: left; }
-        .voucher-details .detail-group:last-child { text-align: right; }
+        .voucher-details { margin-top: 0.4mm; }
+        .voucher-date-line { margin-top: 0.2mm; }
+
         .voucher-details span.number,
-        .voucher-details span.family-id {
-            font-size: 10.5pt;
-            font-weight: bold;
-            text-decoration: underline;
-        }
-        .voucher-date-line {
-            font-size: 9.5pt;
-            margin-top: 0.5mm;
-            white-space: nowrap;
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            flex: 0 0 auto;
-        }
-        .voucher-date-line .detail-group:first-child { text-align: left; }
-        .voucher-date-line .detail-group:last-child { text-align: right; }
+        .voucher-details span.family-id,
         .voucher-date-line span.date-value {
-            font-size: 9.5pt;
+            font-size: 9pt;
             font-weight: bold;
             text-decoration: underline;
         }
 
+        /* Voucher body layout */
         .voucher-body {
             flex: 1 1 auto;
             display: flex;
@@ -817,96 +746,95 @@ export default function PrintSlipsPage() {
         }
 
         .student-details, .fee-desc {
-            font-size: 11pt;
+            font-size: 9pt;
             font-weight: bold;
-            margin-top: 1.5mm;
-            border-bottom: 1pt solid #000;
-            padding-bottom: 0.3mm;
+            margin-top: 0.8mm;
+            border-bottom: 0.8pt solid #000;
+            padding-bottom: 0.2mm;
             flex: 0 0 auto;
         }
 
         .students-table, .fee-table {
             width: 100%;
             border-collapse: collapse;
-            margin-top: 0.5mm;
-            font-size: 11pt;
+            margin-top: 0.4mm;
+            font-size: 8.5pt;
             table-layout: fixed;
             flex: 0 0 auto;
         }
         .students-table th, .students-table td,
         .fee-table th, .fee-table td {
             border: 1px solid #000;
-            padding: 0.5mm 1mm;
+            padding: 0.35mm 0.7mm;
             line-height: 1.15;
-            height: 5.2mm;
+            height: 4mm;
             word-wrap: break-word;
             box-sizing: border-box;
             overflow: hidden;
         }
         .students-table th, .fee-table th {
             font-weight: bold;
-            background-color: #e9e9e9;
-            height: 5.2mm;
+            background-color: #eee;
         }
 
-        .voucher.table-compact .students-table,
-        .voucher.table-compact .fee-table {
-            font-size: 9.8pt;
-        }
-        .voucher.table-compact .students-table th,
-        .voucher.table-compact .students-table td,
-        .voucher.table-compact .fee-table th,
-        .voucher.table-compact .fee-table td {
-            height: 4.5mm;
-            padding: 0.35mm 1mm;
-        }
-
-        .students-table th:nth-child(1), .students-table td:nth-child(1) { width: 37%; text-align: center; }
-        .students-table th:nth-child(2), .students-table td:nth-child(2) { width: 37%; text-align: center; }
-        .students-table th:nth-child(3), .students-table td:nth-child(3) { width: 26%; text-align: center; }
+        .students-table th:nth-child(1), .students-table td:nth-child(1) { width: 38%; text-align: left; }
+        .students-table th:nth-child(2), .students-table td:nth-child(2) { width: 38%; text-align: left; }
+        .students-table th:nth-child(3), .students-table td:nth-child(3) { width: 24%; text-align: center; }
 
         .fee-table th:nth-child(1), .fee-table td:nth-child(1) { width: 12%; text-align: center; }
         .fee-table th:nth-child(2), .fee-table td:nth-child(2) { width: 58%; text-align: left; }
         .fee-table th:nth-child(3), .fee-table td:nth-child(3) { width: 30%; text-align: center; }
         .fee-table .total-row td {
             font-weight: bold;
-            background-color: #e9e9e9;
-            border-top: 1.5pt solid #000;
+            background-color: #eee;
+            border-top: 1.2pt solid #000;
         }
 
+        /* Rules & Software Instructions Section directly after Fee Table */
+        .rules-section {
+            flex: 1 1 auto;
+            display: flex;
+            flex-direction: column;
+            padding-top: 0.6mm;
+            margin-top: 0.8mm;
+            border-top: 0.8pt dashed #000;
+            min-height: 0;
+        }
         .rules-box {
-            flex: 0 0 auto;
-            padding-top: 0.8mm;
-            margin-top: 0.8mm;
-            font-size: 8.8pt;
-            line-height: 1.35;
-            border-top: 1pt dashed #000;
-        }
-        .rules-box .rule-line { display: block; }
-
-        .defaulter-warning-box {
-            flex: 0 0 auto;
-            margin-top: 0.8mm;
-            padding: 0.8mm 1.2mm;
-            border: 1pt solid #000;
-            background-color: #f7f7f7;
-            font-size: 7.5pt;
+            font-size: 7.2pt;
             line-height: 1.25;
+            margin-bottom: 0.6mm;
+            flex: 0 0 auto;
         }
-        .defaulter-warning-box .warning-head {
-            font-size: 7.8pt;
+        .rules-box .rule-line {
+            display: block;
+        }
+        .software-instructions {
+            flex: 1 1 auto;
+            background: #f4f4f4;
+            border: 0.6pt solid #777;
+            border-radius: 0.5mm;
+            padding: 0.6mm 0.8mm;
+            font-size: 7pt;
+            line-height: 1.25;
+            overflow: hidden;
+        }
+        .software-instructions .instructions-label {
             font-weight: bold;
-            color: #000;
-            text-align: center;
+            text-decoration: underline;
+            display: block;
             margin-bottom: 0.3mm;
         }
-        .defaulter-warning-box .warning-body {
-            direction: rtl;
-            text-align: justify;
-            font-size: 7.5pt;
-        }
 
-        .filler { flex: 1 1 auto; }
+        /* Developer credit line */
+        .developer-credit {
+            text-align: center;
+            font-size: 6.5pt;
+            font-style: italic;
+            margin-top: 0.6mm;
+            color: #333;
+            flex: 0 0 auto;
+        }
     `;
 
     // ── Print layout (replaces entire page content while printing) ──────────
@@ -914,24 +842,20 @@ export default function PrintSlipsPage() {
         return (
             <>
                 <style>{printStyles}</style>
-                <div style={{ fontFamily: '"Times New Roman", Times, serif', margin: 0, padding: 0, background: '#fff', width: '297mm' }}>
+                <div style={{ fontFamily: '"Times New Roman", Times, serif', margin: 0, padding: '5mm 6mm', background: '#fff', width: '210mm' }}>
                     {pages.map((page, pi) => (
-                        <div key={pi} className="fee-print-page" style={{
+                        <div key={pi} className="page-container" style={{
                             pageBreakAfter: pi < pages.length - 1 ? 'always' : 'auto',
                             breakAfter: pi < pages.length - 1 ? 'page' : 'auto',
                         }}>
                             {page.map((v, vi) => (
-                                <React.Fragment key={vi}>
-                                    {vi > 0 && <div className="cut-separator" />}
-                                    <VoucherSlip v={v} serial={getSerial(v)} month={month} year={year} school={school} filterClassId={classId || undefined} />
-                                </React.Fragment>
+                                <VoucherSlip key={vi} v={v} serial={getSerial(v)} month={month} year={year} school={school} filterClassId={classId || undefined} />
                             ))}
-                            {page.length < 3 && Array.from({ length: 3 - page.length }).map((_, ei) => (
-                                <React.Fragment key={`e${ei}`}>
-                                    <div className="cut-separator" />
-                                    <div style={{ width: '92mm', height: '190mm', flexShrink: 0, visibility: 'hidden' }} />
-                                </React.Fragment>
+                            {page.length < 4 && Array.from({ length: 4 - page.length }).map((_, ei) => (
+                                <div key={`empty-${ei}`} style={{ width: '96mm', height: '138mm', visibility: 'hidden' }} />
                             ))}
+                            <div className="cut-line-v" />
+                            <div className="cut-line-h" />
                         </div>
                     ))}
                 </div>
@@ -957,7 +881,7 @@ export default function PrintSlipsPage() {
                                 Academic Year: {activeYear?.year_name || '—'}
                             </span>
                         </h2>
-                        <p className="text-muted small mb-0">3 family vouchers per A4 landscape. Sibling fees combined into one voucher. Print tracking enabled.</p>
+                        <p className="text-muted small mb-0">4 family vouchers per A4 portrait page. Sibling fees combined into one voucher. Print tracking enabled.</p>
                     </div>
                 </div>
 
@@ -1054,7 +978,7 @@ export default function PrintSlipsPage() {
                                 </div>
                                 <div className="card-body p-3 small text-muted">
                                     <ul className="list-unstyled mb-0">
-                                        <li className="mb-2"><i className="bi bi-layout-three-columns text-primary me-2"></i>3 vouchers per A4 landscape page</li>
+                                        <li className="mb-2"><i className="bi bi-grid-fill text-primary me-2"></i>4 vouchers per A4 portrait page (2x2)</li>
                                         <li className="mb-2"><i className="bi bi-people-fill me-2" style={{ color: '#215E61' }}></i>Siblings → ONE combined family voucher</li>
                                         <li className="mb-2"><i className="bi bi-sort-up me-2"></i>Priority = highest class sibling</li>
                                         <li className="mb-2"><i className="bi bi-printer-fill text-success me-2"></i>Print marks ALL siblings as printed</li>
