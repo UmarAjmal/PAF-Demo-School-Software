@@ -14,6 +14,7 @@ type StudentRow = {
     student_id: number;
     first_name: string;
     last_name: string;
+    father_name?: string | null;
     admission_no?: string | null;
     roll_no?: string | null;
     marked_subjects: number;
@@ -37,6 +38,7 @@ type StudentCardItem = {
     student_id: number;
     first_name: string;
     last_name: string;
+    father_name?: string | null;
     admission_no?: string | null;
     roll_no?: string | null;
     position: number | null;
@@ -95,92 +97,434 @@ function getLogoUrl(rawLogo?: string): string {
     return `${baseUrl}/${cleanPath}`;
 }
 
+const GRADE_SCALE = [
+    { min: 90, grade: 'A+' },
+    { min: 80, grade: 'A' },
+    { min: 70, grade: 'B' },
+    { min: 60, grade: 'C' },
+    { min: 0,  grade: 'D' }
+];
+
+function gradeFromPercentage(pct: number | null | undefined): string {
+    if (pct === null || pct === undefined || isNaN(pct)) return '';
+    for (const band of GRADE_SCALE) {
+        if (pct >= band.min) return band.grade;
+    }
+    return '';
+}
+
 function buildPrintHtml(payload: CardPayload, isBatch: boolean): string {
     const { meta, school, students } = payload;
-    const schoolName = school.school_name || 'Smart School';
+    const schoolName = school.school_name || 'School Name';
     const address = school.school_address || '';
-    const phones = [school.phone_number, school.school_phone2, school.school_phone3].filter(Boolean).join(' | ');
+    const phones = [school.phone_number, school.school_phone2, school.school_phone3].filter(Boolean).join(', ');
+    const schoolSub = [address, phones ? `Contact: ${phones}` : ''].filter(Boolean).join(' &bull; ') || 'School Address &bull; Contact';
     const logo = getLogoUrl(school.school_logo_url);
 
+    const now = new Date();
+    const day = String(now.getDate()).padStart(2, '0');
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const year = now.getFullYear();
+    const issueDateStr = `${day} / ${month} / ${year}`;
+
     const cardsHtml = students.map((student) => {
-        const rows = student.subject_rows.map((sr, idx) => {
-            const pct = sr.total_marks && sr.total_marks > 0 && sr.obtained_marks !== null
-                ? Math.round((sr.obtained_marks / sr.total_marks) * 100)
+        const fullName = `${student.first_name || ''} ${student.last_name || ''}`.trim() || '[ Student Full Name ]';
+        const fatherName = student.father_name || '[ Father Full Name ]';
+        const classSec = `${meta.class_name || '[ Class ]'} — ${meta.section_name || '[ Section ]'}`;
+        const rollNo = student.roll_no || '&nbsp;';
+        const admNo = student.admission_no || '[ 0000 ]';
+
+        let totalMarksSum = 0;
+        let obtainedSum = 0;
+        let obtainedCount = 0;
+
+        const subjectRows = student.subject_rows || [];
+        const rows = subjectRows.map((sr, idx) => {
+            const total = (sr.total_marks !== null && sr.total_marks !== undefined && sr.total_marks > 0) ? sr.total_marks : 100;
+            const hasObtained = sr.obtained_marks !== null && sr.obtained_marks !== undefined && !isNaN(Number(sr.obtained_marks));
+            const obtained = hasObtained ? Number(sr.obtained_marks) : null;
+
+            totalMarksSum += total;
+            if (obtained !== null) {
+                obtainedSum += obtained;
+                obtainedCount++;
+            }
+
+            const pct = (obtained !== null && total > 0)
+                ? Math.round((obtained / total) * 1000) / 10
                 : null;
+            const grade = (pct !== null) ? gradeFromPercentage(pct) : '';
+
             return `
                 <tr>
-                    <td class="center">${idx + 1}</td>
-                    <td class="bold">${esc(sr.subject_name)}</td>
-                    <td class="center">${sr.total_marks !== null ? esc(fmtNum(sr.total_marks)) : ''}</td>
-                    <td class="center bold">${sr.obtained_marks !== null ? esc(fmtNum(sr.obtained_marks)) : ''}</td>
-                    <td class="center">${pct !== null ? `${pct}%` : ''}</td>
+                    <td>${idx + 1}</td>
+                    <td class="subject">${esc(sr.subject_name)}</td>
+                    <td>${esc(fmtNum(total))}</td>
+                    <td>${obtained !== null ? esc(fmtNum(obtained)) : ''}</td>
+                    <td>${pct !== null ? `${pct}%` : ''}</td>
+                    <td>${esc(grade)}</td>
                 </tr>
             `;
         }).join('');
 
+        const overallHasMarks = obtainedCount > 0;
+        const calculatedOverallPct = (overallHasMarks && totalMarksSum > 0)
+            ? Math.round((obtainedSum / totalMarksSum) * 1000) / 10
+            : null;
+
+        const displayPct = student.percentage !== null && student.percentage !== undefined
+            ? `${student.percentage}%`
+            : (calculatedOverallPct !== null ? `${calculatedOverallPct}%` : '[ __ % ]');
+
+        const displayGrade = student.grade || (calculatedOverallPct !== null ? gradeFromPercentage(calculatedOverallPct) : '[ A/B/C ]');
+
+        const effectivePctForStatus = student.percentage !== null && student.percentage !== undefined
+            ? student.percentage
+            : calculatedOverallPct;
+
+        const displayStatus = effectivePctForStatus !== null
+            ? (effectivePctForStatus >= 33 ? 'PASS' : 'FAIL')
+            : '[ PASS/FAIL ]';
+
+        const displayPosition = student.ordinal_position || (student.position ? String(student.position) : '[ __ ]');
+
+        const totalRowHtml = `
+            <tr class="total-row">
+                <td colspan="2">TOTAL</td>
+                <td>${fmtNum(totalMarksSum)}</td>
+                <td>${overallHasMarks ? fmtNum(obtainedSum) : ''}</td>
+                <td>${displayPct !== '[ __ % ]' ? displayPct : ''}</td>
+                <td>&nbsp;</td>
+            </tr>
+        `;
+
+        const logoHtml = logo
+            ? `<div class="logo"><img src="${esc(logo)}" alt="Logo" /></div>`
+            : `<div class="logo">SCHOOL<br>LOGO</div>`;
+
+        const sessionParts: string[] = [];
+        if (meta.year_name) sessionParts.push(`Academic Session: [ <span>${esc(meta.year_name)}</span> ]`);
+        if (meta.term_name) sessionParts.push(`Term: [ <span>${esc(meta.term_name)}</span> ]`);
+        const sessionLineHtml = sessionParts.length > 0 ? sessionParts.join(' &nbsp;&bull;&nbsp; ') : 'Academic Session: [ 2025 - 2026 ]';
+
         return `
-            <div className="card-page">
-                <div className="header-box">
-                    <div>
-                        <div className="school-name">${esc(schoolName)}</div>
-                        <div>${esc(address)} ${phones ? ' | Tel: ' + esc(phones) : ''}</div>
-                    </div>
-                    ${logo ? `<img src="${esc(logo)}" style="max-height: 55px;"/>` : ''}
+            <div class="page-wrap">
+              <div class="page">
+                <!-- Header -->
+                <div class="header">
+                  ${logoHtml}
+                  <div class="school-block">
+                    <div class="school-name">${esc(schoolName)}</div>
+                    <div class="school-sub">${schoolSub}</div>
+                  </div>
                 </div>
-                <div className="title-banner">STUDENT RESULT CARD</div>
-                <div className="info-grid">
-                    <div><strong>Student Name:</strong> ${esc(`${student.first_name} ${student.last_name}`)}</div>
-                    <div><strong>Roll No:</strong> ${esc(student.roll_no || '—')}</div>
-                    <div><strong>Class & Sec:</strong> ${esc(meta.class_name)} (${esc(meta.section_name)})</div>
-                    <div><strong>Admission No:</strong> ${esc(student.admission_no || '—')}</div>
-                    <div><strong>Term:</strong> ${esc(meta.term_name)}</div>
-                    <div><strong>Academic Year:</strong> ${esc(meta.year_name)}</div>
+
+                <div class="report-title"><span class="star">&#10022;</span> STUDENT RESULT CARD <span class="star">&#10022;</span></div>
+                <div class="session-line">${sessionLineHtml}</div>
+
+                <!-- Student info -->
+                <div class="info-block">
+                  <div class="line"><span class="label">Student Name :</span> <span>${esc(fullName)}</span></div>
+                  <div class="line"><span class="label">Father Name :</span> <span>${esc(fatherName)}</span></div>
+                  <div class="line"><span class="label">Class &amp; Sec. :</span> <span>${esc(classSec)}</span></div>
+                  <div class="line"><span class="label">Roll No. :</span> <span>${esc(rollNo)}</span></div>
+                  <div class="line"><span class="label">Admission No. :</span> <span>${esc(admNo)}</span></div>
                 </div>
-                <table>
-                    <thead>
-                        <tr>
-                            <th style="width: 40px;">#</th>
-                            <th>Subject</th>
-                            <th style="width: 90px;">Total Marks</th>
-                            <th style="width: 100px;">Obtained Marks</th>
-                            <th style="width: 80px;">%</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${rows}
-                    </tbody>
+
+                <!-- Subject table -->
+                <table class="marks-table">
+                  <thead>
+                    <tr>
+                      <th style="width:6%;">S.#</th>
+                      <th style="width:36%;">SUBJECT</th>
+                      <th style="width:14%;">TOTAL</th>
+                      <th style="width:16%;">OBTAINED</th>
+                      <th style="width:14%;">%</th>
+                      <th style="width:14%;">GRADE</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${rows}
+                    ${totalRowHtml}
+                  </tbody>
                 </table>
-                <div className="summary-box">
-                    <div>Grand Total: <strong>${esc(fmtNum(student.grand_obtained_marks))} / ${esc(fmtNum(student.grand_total_marks))}</strong></div>
-                    <div>Percentage: <strong>${student.percentage !== null ? student.percentage + '%' : '—'}</strong></div>
-                    <div>Grade: <strong>${esc(student.grade || '—')}</strong></div>
-                    <div>Position in Class: <strong>${esc(student.ordinal_position || '—')}</strong></div>
+
+                <!-- Summary line -->
+                <div class="summary-line">
+                  PERCENTAGE: <span>${displayPct}</span><span class="sep">|</span>
+                  GRADE: <span>${displayGrade}</span><span class="sep">|</span>
+                  POSITION: <span>${esc(displayPosition)}</span><span class="sep">|</span>
+                  STATUS: <span>${displayStatus}</span>
                 </div>
+
+                <!-- Grading scale -->
+                <div class="grading-line"><span class="gs-label">Grading Scale:</span> A+ (90-100) &nbsp; A (80-89) &nbsp; B (70-79) &nbsp; C (60-69) &nbsp; D (Below 60)</div>
+
+                <!-- Remarks -->
+                <div class="remarks-heading">Class Teacher's Remarks</div>
+                <div class="remarks-line"></div>
+                <div class="remarks-line"></div>
+
+                <div class="bottom-spacer"></div>
+
+                <!-- Signatures -->
+                <div class="signatures">
+                  <div class="sig">
+                    <div class="sig-line"></div>
+                    <div class="sig-label">Class Teacher</div>
+                  </div>
+                  <div class="sig">
+                    <div class="sig-line"></div>
+                    <div class="sig-label">Exam Controller</div>
+                  </div>
+                  <div class="sig">
+                    <div class="sig-line"></div>
+                    <div class="sig-label">Principal</div>
+                  </div>
+                </div>
+
+                <div class="issue-date">Date of Issue: [ <span>${issueDateStr}</span> ]</div>
+
+                <!-- Developer Footer Line -->
+                <div class="developer-footer">
+                  Software designed and developed by <strong>FALCON SWIFT PVT. LTD.</strong> &bull; Website: <strong>www.falconswift.online</strong> &bull; Contact: <strong>03208624173, 03263392082</strong>
+                </div>
+              </div>
             </div>
         `;
-    }).join(isBatch ? '<div className="page-break"></div>' : '');
+    }).join(isBatch ? '<div class="page-break"></div>' : '');
 
-    return `<!doctype html>
-<html>
+    return `<!DOCTYPE html>
+<html lang="en">
 <head>
-<meta charset="utf-8"/>
-<title>Result Card – ${esc(meta.class_name)} (${esc(meta.section_name)})</title>
+<meta charset="UTF-8">
+<title>Student Result Card – ${esc(meta.class_name)} (${esc(meta.section_name)})</title>
 <style>
-  @page { size: A4 portrait; margin: 10mm; }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: Arial, sans-serif; font-size: 12px; color: #1e293b; padding: 15px; }
-  .card-page { padding: 15px; border: 2px solid #334155; border-radius: 6px; }
-  .header-box { display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid #0f172a; padding-bottom: 10px; margin-bottom: 10px; }
-  .school-name { font-size: 20px; font-weight: bold; color: #0f172a; text-transform: uppercase; }
-  .title-banner { background: #0f172a; color: #fff; text-align: center; font-weight: bold; padding: 6px; font-size: 14px; letter-spacing: 1px; margin-bottom: 12px; }
-  .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; background: #f8fafc; padding: 10px; border: 1px solid #cbd5e1; border-radius: 4px; margin-bottom: 12px; }
-  table { width: 100%; border-collapse: collapse; margin-bottom: 12px; }
-  th, td { border: 1px solid #94a3b8; padding: 8px; }
-  th { background: #1e293b; color: #fff; text-align: center; }
-  .center { text-align: center; }
-  .bold { font-weight: bold; }
-  .summary-box { display: flex; justify-content: space-around; background: #f1f5f9; padding: 10px; font-size: 13px; border-top: 2px solid #0f172a; border-radius: 4px; }
-  .page-break { page-break-after: always; height: 0; }
+  @page {
+    size: A4 portrait;
+    margin: 8mm 10mm;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    font-family: "Times New Roman", Times, serif;
+    color: #1a1a1a;
+    background: #e5e5e5;
+  }
+  .page-wrap {
+    display: flex;
+    justify-content: center;
+  }
+  .page {
+    width: 210mm;
+    min-height: 277mm;
+    padding: 8mm 12mm;
+    margin: 8mm auto 20mm auto;
+    background: #fff;
+    box-shadow: 0 0 8px rgba(0,0,0,0.25);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box;
+  }
+
+  /* ---------- Header ---------- */
+  .header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding-bottom: 8px;
+    border-bottom: 2px solid #000;
+    margin-bottom: 10px;
+  }
+  .logo {
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    border: 2px solid #000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    font-size: 8px;
+    font-weight: bold;
+    line-height: 1.1;
+    flex-shrink: 0;
+    padding: 3px;
+    color: #000;
+    overflow: hidden;
+  }
+  .logo img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
+  .school-block { flex: 1; text-align: left; }
+  .school-name {
+    font-size: 24px;
+    font-weight: bold;
+    letter-spacing: 0.5px;
+    margin: 0;
+    color: #000;
+    text-transform: uppercase;
+  }
+  .school-sub {
+    font-size: 12px;
+    color: #000;
+    margin-top: 2px;
+    line-height: 1.3;
+  }
+
+  /* ---------- Title ---------- */
+  .report-title {
+    text-align: center;
+    font-size: 19px;
+    font-weight: bold;
+    letter-spacing: 2px;
+    color: #000;
+    margin: 4px 0 2px 0;
+  }
+  .report-title .star { color: #000; }
+  .session-line {
+    text-align: center;
+    font-size: 13px;
+    font-style: italic;
+    margin-bottom: 10px;
+    color: #000;
+  }
+
+  /* ---------- Student info (stacked lines) ---------- */
+  .info-block {
+    font-size: 13.5px;
+    margin-bottom: 10px;
+    padding: 6px 0;
+    border-top: 1px solid #000;
+    border-bottom: 1px solid #000;
+  }
+  .info-block .line { padding: 2px 4px; }
+  .info-block .label { font-weight: bold; display: inline-block; min-width: 130px; }
+
+  /* ---------- Subject table ---------- */
+  .marks-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 10px;
+  }
+  .marks-table th, .marks-table td {
+    border: 1px solid #000;
+    padding: 5px 8px;
+    font-size: 13px;
+    text-align: center;
+  }
+  .marks-table th {
+    background: #d9d9d9;
+    color: #000;
+    font-weight: bold;
+    letter-spacing: 0.5px;
+  }
+  .marks-table td.subject { text-align: left; }
+  .marks-table tr.total-row td {
+    font-weight: bold;
+    background: #f2f2f2;
+  }
+
+  /* ---------- Summary line ---------- */
+  .summary-line {
+    text-align: center;
+    font-size: 13.5px;
+    font-weight: bold;
+    padding: 7px;
+    background: #f2f2f2;
+    border: 1px solid #000;
+    margin-bottom: 10px;
+    letter-spacing: 0.3px;
+  }
+  .summary-line .sep { color: #000; margin: 0 8px; font-weight: normal; }
+
+  /* ---------- Grading scale ---------- */
+  .grading-line {
+    text-align: center;
+    font-size: 12px;
+    margin-bottom: 10px;
+    color: #000;
+  }
+  .grading-line .gs-label { font-weight: bold; }
+
+  /* ---------- Remarks ---------- */
+  .remarks-heading {
+    font-weight: bold;
+    font-size: 13px;
+    margin: 0 0 5px 0;
+  }
+  .remarks-line {
+    border-bottom: 1px solid #000;
+    height: 18px;
+    margin-bottom: 4px;
+  }
+
+  .bottom-spacer { flex: 1; min-height: 15px; }
+
+  /* ---------- Signatures ---------- */
+  .signatures {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 25px;
+    text-align: center;
+  }
+  .signatures .sig { flex: 1; }
+  .sig-line {
+    border-bottom: 1px solid #000;
+    width: 78%;
+    margin: 0 auto 6px auto;
+    height: 20px;
+  }
+  .sig-label {
+    font-size: 12px;
+    font-weight: bold;
+    color: #000;
+  }
+  .issue-date {
+    text-align: center;
+    font-style: italic;
+    font-size: 11.5px;
+    margin-top: 12px;
+    color: #000;
+  }
+
+  /* ---------- Developer Footer Line ---------- */
+  .developer-footer {
+    text-align: center;
+    font-size: 9.5px;
+    color: #333;
+    letter-spacing: 0.2px;
+    margin-top: 10px;
+    padding-top: 5px;
+    border-top: 1px dashed #aaa;
+    font-family: Arial, Helvetica, sans-serif;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .developer-footer strong {
+    color: #111;
+  }
+
+  @media print {
+    body { background: #fff; margin: 0; padding: 0; }
+    .page-wrap { display: block; margin: 0; padding: 0; }
+    .page {
+      box-shadow: none;
+      margin: 0 auto;
+      padding: 6mm 10mm;
+      width: 100%;
+      height: 275mm;
+      max-height: 275mm;
+      page-break-inside: avoid;
+      break-inside: avoid;
+    }
+    .page-break {
+      page-break-after: always;
+      break-after: page;
+      height: 0;
+    }
+  }
 </style>
 </head>
 <body onload="window.print()">
@@ -560,7 +904,10 @@ export default function ResultCardPage() {
                                                             >
                                                                 {s.first_name[0]}{s.last_name[0] || ''}
                                                             </div>
-                                                            <div className="fw-semibold text-dark">{s.first_name} {s.last_name}</div>
+                                                            <div>
+                                                                <div className="fw-semibold text-dark">{s.first_name} {s.last_name}</div>
+                                                                {s.father_name && <div className="text-muted extra-small">S/D/O {s.father_name}</div>}
+                                                            </div>
                                                         </div>
                                                     </td>
                                                     <td className="text-center">

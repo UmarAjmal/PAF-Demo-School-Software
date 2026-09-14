@@ -752,6 +752,7 @@ router.get('/result-card/students', async (req, res) => {
                 s.student_id,
                 s.first_name,
                 s.last_name,
+                s.father_name,
                 s.admission_no,
                 s.roll_no,
                 COUNT(em.mark_id)::int AS marked_subjects,
@@ -766,7 +767,7 @@ router.get('/result-card/students', async (req, res) => {
              WHERE s.class_id = $2
                AND s.section_id = $3
                AND s.status = 'Active'
-             GROUP BY s.student_id, s.first_name, s.last_name, s.admission_no, s.roll_no
+             GROUP BY s.student_id, s.first_name, s.last_name, s.father_name, s.admission_no, s.roll_no
              ORDER BY s.roll_no ASC NULLS LAST, s.first_name ASC, s.last_name ASC`,
             [termId, classId, sectionId]
         );
@@ -848,7 +849,7 @@ router.post('/result-card/data', async (req, res) => {
         }
 
         const studentsRes = await client.query(
-            `SELECT s.student_id, s.first_name, s.last_name, s.admission_no, s.roll_no
+            `SELECT s.student_id, s.first_name, s.last_name, s.father_name, s.admission_no, s.roll_no
              FROM students s
              WHERE s.class_id = $1
                AND s.section_id = $2
@@ -959,6 +960,7 @@ router.post('/result-card/data', async (req, res) => {
                 student_id: student.student_id,
                 first_name: student.first_name,
                 last_name: student.last_name,
+                father_name: student.father_name || '',
                 admission_no: student.admission_no,
                 roll_no: student.roll_no,
                 position: rankInfo.position,
