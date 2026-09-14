@@ -1521,21 +1521,12 @@ router.get('/print-queue', async (req, res) => {
 // POST /fee-slips/mark-printed
 router.post('/mark-printed', async (req, res) => {
     try {
-        const { slip_ids, due_date, issue_date } = req.body;
+        const { slip_ids } = req.body;
         if (!slip_ids || slip_ids.length === 0) return res.status(400).json({ error: 'slip_ids required' });
-        
-        let updateSql = `UPDATE monthly_fee_slips SET is_printed = TRUE, printed_at = NOW()`;
-        const params = [slip_ids];
-        if (due_date) {
-            params.push(due_date);
-            updateSql += `, due_date = $${params.length}`;
-        }
-        if (issue_date) {
-            params.push(issue_date);
-            updateSql += `, issue_date = $${params.length}`;
-        }
-        updateSql += ` WHERE slip_id = ANY($1)`;
-        await pool.query(updateSql, params);
+        await pool.query(
+            `UPDATE monthly_fee_slips SET is_printed = TRUE, printed_at = NOW() WHERE slip_id = ANY($1)`,
+            [slip_ids]
+        );
         res.json({ message: `${slip_ids.length} slip(s) marked as printed` });
     } catch (err) { res.status(500).json({ error: err.message }); }
 });

@@ -32,41 +32,16 @@ interface SchoolInfo {
 function fmtAmt(n: number) { return `${Number(n || 0).toLocaleString('en-PK')}/-`; }
 function fmtDate(d: string | Date | null) {
     if (!d) return '--';
-    if (typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d.trim())) {
-        const [y, m, day] = d.trim().split('-').map(Number);
-        const dateObj = new Date(y, m - 1, day);
-        return dateObj.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
-    }
     return new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 function zeroPad(n: number, digits = 6) { return String(n).padStart(digits, '0'); }
 
-function VoucherSlip({ v, serial, month, year, school, filterClassId, trustedStudentIds, customDueDate, customIssueDate }: { 
-    v: Voucher; 
-    serial: number; 
-    month: string; 
-    year: string; 
-    school: SchoolInfo; 
-    filterClassId?: string; 
-    trustedStudentIds?: Set<number>;
-    customDueDate?: string;
-    customIssueDate?: string;
-}) {
+function VoucherSlip({ v, serial, month, year, school, filterClassId, trustedStudentIds }: { v: Voucher; serial: number; month: string; year: string; school: SchoolInfo; filterClassId?: string; trustedStudentIds?: Set<number> }) {
     const mIdx = parseInt(month) - 1;
     const monthName = MONTHS[mIdx] || '';
     const voucherNo = `${MONTH_SHORT[mIdx] || 'FEE'}${zeroPad(serial)}`;
-
-    // Resolve Due Date: customDueDate > v.primary.due_date > 10th of the month
-    let resolvedDueDate: string | Date | null = customDueDate || v.primary.due_date;
-    if (!resolvedDueDate && month && year) {
-        const mPad = String(month).padStart(2, '0');
-        resolvedDueDate = `${year}-${mPad}-10`;
-    }
-    const dueDate = resolvedDueDate ? fmtDate(resolvedDueDate) : '--';
-
-    // Resolve Issue Date: customIssueDate > v.primary.issue_date > today
-    const resolvedIssueDate = customIssueDate || v.primary.issue_date || new Date();
-    const issueDate = fmtDate(resolvedIssueDate);
+    const dueDate = v.primary.due_date ? fmtDate(v.primary.due_date) : '--';
+    const issueDate = v.primary.issue_date ? fmtDate(v.primary.issue_date) : fmtDate(new Date());
 
     const isTrustedMember = (m: any) => {
         if (!m) return false;
@@ -270,7 +245,7 @@ function VoucherSlip({ v, serial, month, year, school, filterClassId, trustedStu
                 <div className="rules-section">
                     <div className="rules-box">
                         <span className="rule-line">1. Fee must be paid before the due date.</span>
-                        <span className="rule-line">2. A fine/late fee will apply after the due date.</span>
+                        <span className="rule-line">2. A fine/late fee will apply after {fineCutoffDateStr !== '--' ? fineCutoffDateStr : 'the due date'}.</span>
                         <span className="rule-line">3. Fee must be deposited only at school-designated bank/counter.</span>
                         <span className="rule-line">4. Fee once paid is non-refundable under any circumstances.</span>
                     </div>
@@ -300,15 +275,7 @@ function VoucherSlip({ v, serial, month, year, school, filterClassId, trustedStu
     );
 }
 
-function VoucherCard({ v, idx, selected, onToggle, filterClassId, trustedStudentIds, customDueDate }: { 
-    v: Voucher; 
-    idx: number; 
-    selected: boolean; 
-    onToggle: () => void; 
-    filterClassId?: string; 
-    trustedStudentIds?: Set<number>;
-    customDueDate?: string;
-}) {
+function VoucherCard({ v, idx, selected, onToggle, filterClassId, trustedStudentIds }: { v: Voucher; idx: number; selected: boolean; onToggle: () => void; filterClassId?: string; trustedStudentIds?: Set<number> }) {
     const remaining = parseFloat(v.total_family_amount as any) - parseFloat(v.total_paid as any);
     const isFam = v.voucher_type === 'family';
 
@@ -377,14 +344,6 @@ function VoucherCard({ v, idx, selected, onToggle, filterClassId, trustedStudent
                         )}
                         <div className="text-muted" style={{ fontSize: '0.72rem' }}>
                             Adm: {displayPrimary.admission_no || v.primary.admission_no}
-                            {(() => {
-                                let cardDueDate = customDueDate || v.primary.due_date;
-                                if (!cardDueDate && (v.primary as any).month && (v.primary as any).year) {
-                                    const mPad = String((v.primary as any).month).padStart(2, '0');
-                                    cardDueDate = `${(v.primary as any).year}-${mPad}-10`;
-                                }
-                                return cardDueDate ? <span className="ms-2 fw-semibold" style={{ color: 'var(--primary-teal)' }}>Due: {fmtDate(cardDueDate)}</span> : null;
-                            })()}
                             {v.primary.printed_at && <span className="ms-2">Printed: {new Date(v.primary.printed_at).toLocaleDateString('en-PK')}</span>}
                         </div>
                     </div>
@@ -421,18 +380,6 @@ export default function PrintSlipsPage() {
     const [message, setMessage] = useState<{ type: 'success' | 'danger'; text: string } | null>(null);
     const [printing, setPrinting] = useState(false);
     const [trustedStudentIds, setTrustedStudentIds] = useState<Set<number>>(new Set());
-    const [issueDateInput, setIssueDateInput] = useState(() => {
-        const d = new Date();
-        return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().split('T')[0];
-    });
-    const [dueDateInput, setDueDateInput] = useState('');
-
-    useEffect(() => {
-        if (month && year) {
-            const mPad = String(month).padStart(2, '0');
-            setDueDateInput(`${year}-${mPad}-10`);
-        }
-    }, [month, year]);
 
     useEffect(() => {
         fetch(`${API}/students?limit=2000`).then(r => r.json()).then(data => {
@@ -632,14 +579,6 @@ export default function PrintSlipsPage() {
             setVouchers(sortedList);
             setCoveredStudents(data.covered_students || []);
             setStats(data.stats || null);
-
-            // Sync Due Date input if returned slips have due_date
-            const firstDueSlip = (data.vouchers || []).find((v: any) => v.primary?.due_date);
-            if (firstDueSlip && firstDueSlip.primary.due_date) {
-                try {
-                    setDueDateInput(new Date(firstDueSlip.primary.due_date).toISOString().split('T')[0]);
-                } catch {}
-            }
         } catch (err: any) { setMessage({ type: 'danger', text: err.message }); }
         finally { setLoading(false); }
     };
@@ -698,15 +637,7 @@ export default function PrintSlipsPage() {
     const markAsPrinted = async () => {
         setMarkingPrinted(true);
         try {
-            const r = await fetch(`${API}/fee-slips/mark-printed`, { 
-                method: 'POST', 
-                headers: { 'Content-Type': 'application/json' }, 
-                body: JSON.stringify({ 
-                    slip_ids: pendingSlipIds,
-                    due_date: dueDateInput || undefined,
-                    issue_date: issueDateInput || undefined
-                }) 
-            });
+            const r = await fetch(`${API}/fee-slips/mark-printed`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ slip_ids: pendingSlipIds }) });
             const data = await r.json();
             if (!r.ok) throw new Error(data.error);
             setMessage({ type: 'success', text: `Marked ${pendingSlipIds.length} slip(s) as printed.` });
@@ -1066,18 +997,7 @@ export default function PrintSlipsPage() {
                             breakAfter: pi < pages.length - 1 ? 'page' : 'auto',
                         }}>
                             {page.map((v, vi) => (
-                                <VoucherSlip 
-                                    key={vi} 
-                                    v={v} 
-                                    serial={getSerial(v)} 
-                                    month={month} 
-                                    year={year} 
-                                    school={school} 
-                                    filterClassId={classId || undefined} 
-                                    trustedStudentIds={trustedStudentIds}
-                                    customDueDate={dueDateInput}
-                                    customIssueDate={issueDateInput}
-                                />
+                                <VoucherSlip key={vi} v={v} serial={getSerial(v)} month={month} year={year} school={school} filterClassId={classId || undefined} trustedStudentIds={trustedStudentIds} />
                             ))}
                             {page.length < 4 && Array.from({ length: 4 - page.length }).map((_, ei) => (
                                 <div key={`empty-${ei}`} style={{ width: '96mm', height: '138mm', visibility: 'hidden' }} />
@@ -1123,7 +1043,7 @@ export default function PrintSlipsPage() {
                 <div className="card border-0 shadow-sm mb-4">
                     <div className="card-body p-3">
                         <div className="row g-3 align-items-end">
-                            <div className="col-md-2 col-sm-6">
+                            <div className="col-md-3">
                                 <label className="form-label fw-bold small text-muted">Month</label>
                                 <select className="form-select" value={month} onChange={e => setMonth(e.target.value)}>
                                     {availableMonths.length === 0 ? (
@@ -1133,7 +1053,7 @@ export default function PrintSlipsPage() {
                                     )}
                                 </select>
                             </div>
-                            <div className="col-md-2 col-sm-6">
+                            <div className="col-md-3">
                                 <label className="form-label fw-bold small text-muted">Year</label>
                                 <input
                                     type="text"
@@ -1144,35 +1064,14 @@ export default function PrintSlipsPage() {
                                     style={{ cursor: 'not-allowed' }}
                                 />
                             </div>
-                            <div className="col-md-2 col-sm-6">
-                                <label className="form-label fw-bold small text-muted">Class Filter</label>
+                            <div className="col-md-3">
+                                <label className="form-label fw-bold small text-muted">Class Filter (optional)</label>
                                 <select className="form-select" value={classId} onChange={e => setClassId(e.target.value)}>
                                     <option value="">All Classes</option>
                                     {classes.map(c => <option key={c.class_id} value={c.class_id}>{c.class_name}</option>)}
                                 </select>
                             </div>
-                            <div className="col-md-2 col-sm-6">
-                                <label className="form-label fw-bold small text-muted">Issue Date</label>
-                                <input
-                                    type="date"
-                                    className="form-control"
-                                    value={issueDateInput}
-                                    onChange={e => setIssueDateInput(e.target.value)}
-                                />
-                            </div>
-                            <div className="col-md-2 col-sm-6">
-                                <label className="form-label fw-bold small" style={{ color: 'var(--primary-teal)' }}>
-                                    Due Date <i className="bi bi-calendar-check ms-1"></i>
-                                </label>
-                                <input
-                                    type="date"
-                                    className="form-control fw-bold"
-                                    style={{ borderColor: 'var(--primary-teal)' }}
-                                    value={dueDateInput}
-                                    onChange={e => setDueDateInput(e.target.value)}
-                                />
-                            </div>
-                            <div className="col-md-2 col-sm-12">
+                            <div className="col-md-3">
                                 <button className="btn btn-primary-custom w-100 py-2 fw-bold" onClick={loadQueue} disabled={loading}>
                                     {loading ? <><span className="spinner-border spinner-border-sm me-2"></span>Loading...</> : <><i className="bi bi-search me-2"></i>Load Queue</>}
                                 </button>
@@ -1217,18 +1116,7 @@ export default function PrintSlipsPage() {
                                     </button>
                                 </div>
                             </div>
-                            {vouchers.map((v, i) => (
-                                <VoucherCard 
-                                    key={i} 
-                                    v={v} 
-                                    idx={i} 
-                                    selected={selected.has(i)} 
-                                    onToggle={() => toggleSelect(i)} 
-                                    filterClassId={classId || undefined} 
-                                    trustedStudentIds={trustedStudentIds}
-                                    customDueDate={dueDateInput}
-                                />
-                            ))}
+                            {vouchers.map((v, i) => <VoucherCard key={i} v={v} idx={i} selected={selected.has(i)} onToggle={() => toggleSelect(i)} filterClassId={classId || undefined} trustedStudentIds={trustedStudentIds} />)}
                         </div>
                         <div className="col-lg-4">
                             <div className="card border-0 shadow-sm mb-3">
