@@ -301,10 +301,11 @@ router.get('/context', async (req, res) => {
                  SELECT DISTINCT
                     c.class_id, c.class_name,
                     sec.section_id, sec.section_name,
-                    NULL::int as subject_id, NULL::varchar as subject_name, NULL::varchar as subject_code, NULL::int as term_id
+                    s.subject_id, s.subject_name, s.subject_code, s.term_id
                  FROM teacher_class_assignment tca
                  JOIN classes c ON c.class_id = tca.class_id
                  JOIN sections sec ON sec.section_id = tca.section_id
+                 LEFT JOIN subjects s ON s.section_id = sec.section_id
                  WHERE tca.employee_id = $1 AND tca.is_class_teacher = true
 
                  ORDER BY class_name, section_name, subject_name`,
@@ -1595,10 +1596,11 @@ router.get('/tests/context', async (req, res) => {
                  SELECT DISTINCT
                     c.class_id, c.class_name,
                     sec.section_id, sec.section_name,
-                    NULL::int as subject_id, NULL::varchar as subject_name, NULL::varchar as subject_code, NULL::int as term_id
+                    s.subject_id, s.subject_name, s.subject_code, s.term_id
                  FROM teacher_class_assignment tca
                  JOIN classes c ON c.class_id = tca.class_id
                  JOIN sections sec ON sec.section_id = tca.section_id
+                 LEFT JOIN subjects s ON s.section_id = sec.section_id
                  WHERE tca.employee_id = $1 AND tca.is_class_teacher = true
 
                  ORDER BY class_name, section_name, subject_name`,
@@ -1611,11 +1613,13 @@ router.get('/tests/context', async (req, res) => {
             }
             classes  = Array.from(classMap.values());
             sections = Array.from(sectionMap.values());
-            subjects = scopeRes.rows.map(r => ({
-                subject_id: r.subject_id, subject_name: r.subject_name, subject_code: r.subject_code, term_id: r.term_id,
-                section_id: r.section_id, section_name: r.section_name,
-                class_id: r.class_id, class_name: r.class_name
-            }));
+            subjects = scopeRes.rows
+                .filter(r => r.subject_id !== null && r.subject_id !== undefined)
+                .map(r => ({
+                    subject_id: r.subject_id, subject_name: r.subject_name, subject_code: r.subject_code, term_id: r.term_id,
+                    section_id: r.section_id, section_name: r.section_name,
+                    class_id: r.class_id, class_name: r.class_name
+                }));
         }
 
         const activeYear = await getActiveAcademicYear(client);

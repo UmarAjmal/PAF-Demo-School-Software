@@ -76,13 +76,20 @@ export default function TestMarkingPage() {
 
     const filteredSubjects = useMemo(() => {
         if (!selClass || !selSection) return [];
-        return subjects.filter(s => {
-            const classMatch = s.class_id === Number(selClass);
-            const sectionMatch = s.section_id === Number(selSection);
-            const termMatch = !selTerm || !s.term_id || String(s.term_id) === String(selTerm);
-            return classMatch && sectionMatch && termMatch;
+        let list = subjects.filter(s =>
+            s.class_id === Number(selClass) && s.section_id === Number(selSection)
+        );
+        if (list.length === 0) {
+            list = subjects.filter(s => s.class_id === Number(selClass));
+        }
+        const seen = new Set<string>();
+        return list.filter(s => {
+            const key = (s.subject_name || '').toLowerCase().trim();
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
         });
-    }, [subjects, selClass, selSection, selTerm]);
+    }, [subjects, selClass, selSection]);
 
     const readyToList = !!(selClass && selSection && selSubject && user?.id);
 

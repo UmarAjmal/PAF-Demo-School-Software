@@ -73,13 +73,20 @@ export default function ExaminationMarksPage() {
 
     const filteredSubjects = useMemo(() => {
         if (!selectedClass || !selectedSection) return [];
-        return subjects.filter(s => {
-            const classMatch = s.class_id === Number(selectedClass);
-            const sectionMatch = s.section_id === Number(selectedSection);
-            const termMatch = !selectedTerm || !s.term_id || String(s.term_id) === String(selectedTerm);
-            return classMatch && sectionMatch && termMatch;
+        let list = subjects.filter(s =>
+            s.class_id === Number(selectedClass) && s.section_id === Number(selectedSection)
+        );
+        if (list.length === 0) {
+            list = subjects.filter(s => s.class_id === Number(selectedClass));
+        }
+        const seen = new Set<string>();
+        return list.filter(s => {
+            const key = (s.subject_name || '').toLowerCase().trim();
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
         });
-    }, [subjects, selectedClass, selectedSection, selectedTerm]);
+    }, [subjects, selectedClass, selectedSection]);
 
     const readyToLoadSheet = !!(selectedTerm && selectedClass && selectedSection && selectedSubject && user?.id);
 
